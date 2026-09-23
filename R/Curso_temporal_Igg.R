@@ -1,3 +1,9 @@
+system("git add R/Curso_temporal_Igg.R")
+system("git add R/Curso_temporal_Igg.R data/processed/Curso_temporal_Igg.xlsx")
+system("git status")
+system('git commit -m "Add processed IgG data and temporal analysis script"')
+system("git push")
+
 options(stringsAsFactors = FALSE)
 
 required_packages <- c(
