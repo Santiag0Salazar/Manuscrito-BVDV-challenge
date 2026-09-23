@@ -1,23 +1,47 @@
-system("git add R/Curso_temporal_Igg.R")
-system("git add R/Curso_temporal_Igg.R data/processed/Curso_temporal_Igg.xlsx")
-system("git status")
-system('git commit -m "Add processed IgG data and temporal analysis script"')
-system("git push")
+# ============================================================
+# ANALISIS TEMPORAL DE IgG ANTI-E2
+# Proyecto: Manuscrito-BVDV-challenge
+# Script: 01_IgG_temporal.R
+#
+# Entrada:
+#   data/processed/Curso_temporal_IgG.xlsx
+#
+# Salidas:
+#   results/tables/Curso_temporal_IgG_resultados.xlsx
+#   results/figures/
+#   results/models/
+#
+# ============================================================
 
-options(stringsAsFactors = FALSE)
+
+# ============================================================
+# 1. PAQUETES
+# ============================================================
 
 required_packages <- c(
-  "ggplot2", "dplyr", "tidyr", "readr", "nlme", "emmeans",
-  "broom", "patchwork", "cowplot", "pracma", "scales", "splines"
+  "ggplot2",
+  "dplyr",
+  "tidyr",
+  "readr",
+  "readxl",
+  "openxlsx",
+  "nlme",
+  "emmeans",
+  "broom",
+  "patchwork",
+  "cowplot",
+  "pracma",
+  "scales",
+  "splines",
+  "purrr"
 )
 
-missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
-if (length(missing_packages) > 0) {
-  stop(
-    "Install missing packages before running this script: ",
-    paste(missing_packages, collapse = ", "),
-    call. = FALSE
-  )
+installed <- rownames(installed.packages())
+
+for (pkg in required_packages) {
+  if (!pkg %in% installed) {
+    install.packages(pkg)
+  }
 }
 
 suppressPackageStartupMessages({
@@ -25,6 +49,8 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(tidyr)
   library(readr)
+  library(readxl)
+  library(openxlsx)
   library(nlme)
   library(emmeans)
   library(broom)
@@ -33,690 +59,1894 @@ suppressPackageStartupMessages({
   library(pracma)
   library(scales)
   library(splines)
+  library(purrr)
 })
+
+
+# ============================================================
+# 2. SEMILLA
+# ============================================================
 
 set.seed(20260620)
 
-base_dir <- normalizePath(file.path(getwd(), ".."), mustWork = TRUE)
-out_dir <- getwd()
-tables_dir <- file.path(out_dir, "tablas")
-figures_dir <- file.path(out_dir, "figuras")
-models_dir <- file.path(out_dir, "modelos")
-dir.create(tables_dir, showWarnings = FALSE, recursive = TRUE)
-dir.create(figures_dir, showWarnings = FALSE, recursive = TRUE)
-dir.create(models_dir, showWarnings = FALSE, recursive = TRUE)
 
-read_elisa_data <- function(path) {
-  read.csv(path, sep = ";", dec = ".", check.names = FALSE) |>
-    mutate(
-      Animal = factor(Animal),
-      Grupo = factor(Grupo, levels = c("Control", "25ug", "50ug", "100ug", "Commercial")),
-      Tiempo = as.numeric(Tiempo),
-      Absorbancia = as.numeric(Absorbancia),
-      TiempoF = factor(Tiempo, levels = sort(unique(Tiempo))),
-      TimeIndex = as.numeric(factor(Tiempo, levels = sort(unique(Tiempo))))
-    ) |>
-    arrange(Grupo, Animal, Tiempo)
+# ============================================================
+# 3. IDENTIFICAR DIRECTORIO DEL PROYECTO
+# ============================================================
+
+find_project_root <- function() {
+  
+  current <- normalizePath(getwd(), mustWork = TRUE)
+  
+  candidates <- unique(c(
+    current,
+    dirname(current),
+    dirname(dirname(current))
+  ))
+  
+  for (path in candidates) {
+    
+    if (file.exists(
+      file.path(path, "Manuscrito-BVDV-challenge.Rproj")
+    )) {
+      return(path)
+    }
+  }
+  
+  stop(
+    paste0(
+      "No se pudo encontrar el directorio raíz del proyecto.\n",
+      "Asegúrate de ejecutar este script desde el proyecto ",
+      "'Manuscrito-BVDV-challenge'."
+    )
+  )
 }
 
-datos <- read_elisa_data(file.path(base_dir, "Datos.csv"))
-datos_vac <- datos |> filter(Grupo != "Control") |> droplevels()
-tiempos <- sort(unique(datos$Tiempo))
+project_dir <- find_project_root()
 
-# Paleta Nature para los puntos
-palette_nature <- c(
-  "Control"   = "#4D4D4D", # Gris oscuro
-  "25ug"      = "#004B87", # Azul oscuro
-  "50ug"      = "#E69F00", # Naranja
-  "100ug"     = "#2ECC71", # Verde claro manzana
-  "Comercial" = "#D55E00"  # Rojo bermellón
+cat("Directorio del proyecto:\n")
+cat(project_dir, "\n\n")
+
+
+# ============================================================
+# 4. DIRECTORIOS
+# ============================================================
+
+data_dir <- file.path(
+  project_dir,
+  "data",
+  "processed"
 )
 
-theme_nature <- function(base_size = 8) {
-  cowplot::theme_cowplot(font_size = base_size, font_family = "sans") +
+results_dir <- file.path(
+  project_dir,
+  "results"
+)
+
+tables_dir <- file.path(
+  results_dir,
+  "tables"
+)
+
+figures_dir <- file.path(
+  results_dir,
+  "figures"
+)
+
+models_dir <- file.path(
+  results_dir,
+  "models"
+)
+
+dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(models_dir, recursive = TRUE, showWarnings = FALSE)
+
+
+# ============================================================
+# 5. ARCHIVO DE ENTRADA
+# ============================================================
+
+input_file <- file.path(
+  data_dir,
+  "Curso_temporal_IgG.xlsx"
+)
+
+if (!file.exists(input_file)) {
+  
+  stop(
+    paste0(
+      "\nNo se encontró el archivo:\n",
+      input_file,
+      "\n\n",
+      "Coloca 'Curso_temporal_IgG.xlsx' en:\n",
+      data_dir
+    )
+  )
+}
+
+
+# ============================================================
+# 6. LEER DATOS
+# ============================================================
+
+cat("Hojas disponibles en el Excel:\n")
+
+print(excel_sheets(input_file))
+
+raw_data <- read_excel(
+  input_file,
+  sheet = 1
+)
+
+cat("\nColumnas encontradas:\n")
+print(names(raw_data))
+
+
+# ============================================================
+# 7. VALIDAR COLUMNAS
+# ============================================================
+
+required_columns <- c(
+  "Animal",
+  "Grupo",
+  "Tiempo",
+  "Absorbancia"
+)
+
+missing_columns <- setdiff(
+  required_columns,
+  names(raw_data)
+)
+
+if (length(missing_columns) > 0) {
+  
+  stop(
+    paste0(
+      "\nFaltan las siguientes columnas obligatorias:\n",
+      paste(missing_columns, collapse = ", "),
+      "\n\nLas columnas esperadas son:\n",
+      paste(required_columns, collapse = ", ")
+    )
+  )
+}
+
+
+# ============================================================
+# 8. PREPARAR DATOS
+# ============================================================
+
+datos <- raw_data %>%
+  
+  mutate(
+    
+    Animal = factor(Animal),
+    
+    Grupo = as.character(Grupo),
+    
+    # Estandarizar nombres
+    Grupo = case_when(
+      Grupo == "Comercial" ~ "Commercial",
+      Grupo == "Commercial" ~ "Commercial",
+      TRUE ~ Grupo
+    ),
+    
+    Grupo = factor(
+      Grupo,
+      levels = c(
+        "Control",
+        "25ug",
+        "50ug",
+        "100ug",
+        "Commercial"
+      )
+    ),
+    
+    Tiempo = as.numeric(Tiempo),
+    
+    Absorbancia = as.numeric(Absorbancia)
+  ) %>%
+  
+  filter(
+    !is.na(Animal),
+    !is.na(Grupo),
+    !is.na(Tiempo),
+    !is.na(Absorbancia)
+  ) %>%
+  
+  mutate(
+    
+    TiempoF = factor(
+      Tiempo,
+      levels = sort(unique(Tiempo))
+    ),
+    
+    TimeIndex = as.numeric(
+      factor(
+        Tiempo,
+        levels = sort(unique(Tiempo))
+      )
+    )
+  )
+
+
+# ============================================================
+# 9. COMPROBACIÓN DE DATOS
+# ============================================================
+
+cat("\nNúmero de observaciones:", nrow(datos), "\n")
+
+cat("\nNúmero de animales:",
+    n_distinct(datos$Animal),
+    "\n")
+
+cat("\nGrupos:\n")
+print(table(datos$Grupo))
+
+cat("\nTiempos:\n")
+print(sort(unique(datos$Tiempo)))
+
+
+# ============================================================
+# 10. DATOS VACUNADOS
+# ============================================================
+
+datos_vac <- datos %>%
+  filter(
+    Grupo != "Control"
+  ) %>%
+  droplevels()
+
+tiempos <- sort(
+  unique(datos$Tiempo)
+)
+
+
+# ============================================================
+# 11. PALETA
+# ============================================================
+
+palette_nature <- c(
+  "Control" = "#4D4D4D",
+  "25ug" = "#004B87",
+  "50ug" = "#E69F00",
+  "100ug" = "#2ECC71",
+  "Commercial" = "#D55E00"
+)
+
+
+# ============================================================
+# 12. TEMA
+# ============================================================
+
+theme_nature <- function(base_size = 9) {
+  
+  theme_classic(
+    base_size = base_size
+  ) +
+    
     theme(
-      plot.title = element_text(face = "bold", size = base_size + 1),
-      plot.subtitle = element_text(size = base_size, color = "grey25"),
-      strip.background = element_blank(),
-      strip.text = element_text(face = "bold", size = base_size),
-      axis.title = element_text(size = base_size),
-      axis.text = element_text(size = base_size - 1, color = "grey15"),
-      legend.title = element_blank(),
-      legend.position = "top",
-      legend.justification = "left",
-      legend.text = element_text(size = base_size - 1),
-      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.25),
-      panel.grid.major.x = element_blank(),
-      panel.grid.minor = element_blank()
+      
+      plot.title = element_text(
+        face = "bold",
+        size = base_size + 1
+      ),
+      
+      axis.title = element_text(
+        face = "bold"
+      ),
+      
+      axis.text = element_text(
+        color = "black"
+      ),
+      
+      legend.title = element_text(
+        face = "bold"
+      ),
+      
+      legend.position = "right",
+      
+      panel.border = element_rect(
+        colour = "black",
+        fill = NA,
+        linewidth = 0.5
+      )
     )
 }
 
-save_nature <- function(plot, filename, width, height) {
-  ggsave(file.path(figures_dir, paste0(filename, ".pdf")), plot, width = width, height = height, units = "in", device = cairo_pdf)
-  ggsave(file.path(figures_dir, paste0(filename, ".tiff")), plot, width = width, height = height, units = "in", dpi = 600, compression = "lzw")
-  ggsave(file.path(figures_dir, paste0(filename, ".png")), plot, width = width, height = height, units = "in", dpi = 300)
+
+# ============================================================
+# 13. FUNCIÓN PARA GUARDAR FIGURAS
+# ============================================================
+
+save_nature <- function(
+    plot,
+    filename,
+    width = 6,
+    height = 4
+) {
+  
+  ggsave(
+    file.path(
+      figures_dir,
+      paste0(filename, ".pdf")
+    ),
+    plot,
+    width = width,
+    height = height,
+    units = "in"
+  )
+  
+  ggsave(
+    file.path(
+      figures_dir,
+      paste0(filename, ".tiff")
+    ),
+    plot,
+    width = width,
+    height = height,
+    units = "in",
+    dpi = 600,
+    compression = "lzw"
+  )
+  
+  ggsave(
+    file.path(
+      figures_dir,
+      paste0(filename, ".png")
+    ),
+    plot,
+    width = width,
+    height = height,
+    units = "in",
+    dpi = 600
+  )
 }
 
-mean_ci <- datos |>
-  group_by(Grupo, Tiempo) |>
+
+# ============================================================
+# 14. RESUMEN POR GRUPO Y TIEMPO
+# ============================================================
+
+mean_ci <- datos %>%
+  
+  group_by(
+    Grupo,
+    Tiempo
+  ) %>%
+  
   summarise(
+    
     n = n(),
-    mean = mean(Absorbancia),
-    sd = sd(Absorbancia),
+    
+    mean = mean(
+      Absorbancia,
+      na.rm = TRUE
+    ),
+    
+    sd = sd(
+      Absorbancia,
+      na.rm = TRUE
+    ),
+    
     se = sd / sqrt(n),
-    ci95 = qt(0.975, df = pmax(n - 1, 1)) * se,
+    
+    ci95 = qt(
+      0.975,
+      df = pmax(n - 1, 1)
+    ) * se,
+    
     lower = mean - ci95,
+    
     upper = mean + ci95,
+    
     .groups = "drop"
   )
 
-group_summary <- datos |>
-  group_by(Grupo, Tiempo) |>
+
+# ============================================================
+# 15. MÉTRICAS INDIVIDUALES
+# ============================================================
+
+animal_metrics <- datos_vac %>%
+  
+  group_by(
+    Animal,
+    Grupo
+  ) %>%
+  
   summarise(
-    n_animals = n_distinct(Animal),
-    mean_abs = mean(Absorbancia),
-    sd_abs = sd(Absorbancia),
-    median_abs = median(Absorbancia),
-    min_abs = min(Absorbancia),
-    max_abs = max(Absorbancia),
+    
+    baseline = ifelse(
+      any(Tiempo == 0),
+      Absorbancia[Tiempo == 0][1],
+      NA_real_
+    ),
+    
+    day14 = ifelse(
+      any(Tiempo == 14),
+      Absorbancia[Tiempo == 14][1],
+      NA_real_
+    ),
+    
+    day21 = ifelse(
+      any(Tiempo == 21),
+      Absorbancia[Tiempo == 21][1],
+      NA_real_
+    ),
+    
+    day28 = ifelse(
+      any(Tiempo == 28),
+      Absorbancia[Tiempo == 28][1],
+      NA_real_
+    ),
+    
+    day56 = ifelse(
+      any(Tiempo == 56),
+      Absorbancia[Tiempo == 56][1],
+      NA_real_
+    ),
+    
+    peak = max(
+      Absorbancia,
+      na.rm = TRUE
+    ),
+    
+    peak_day = Tiempo[
+      which.max(Absorbancia)
+    ],
+    
+    delta_D28_D21 = day28 - day21,
+    
+    persistence = ifelse(
+      !is.na(day56) & peak > 0,
+      day56 / peak,
+      NA_real_
+    ),
+    
+    AUC = if (
+      sum(!is.na(Absorbancia)) >= 2
+    ) {
+      
+      pracma::trapz(
+        Tiempo,
+        Absorbancia
+      )
+      
+    } else {
+      
+      NA_real_
+    },
+    
     .groups = "drop"
   )
-write_csv(group_summary, file.path(tables_dir, "01_resumen_por_grupo_y_tiempo.csv"))
 
-animal_metrics <- datos |>
-  group_by(Grupo, Animal) |>
-  arrange(Tiempo, .by_group = TRUE) |>
+
+# ============================================================
+# 16. RESUMEN DE MÉTRICAS POR GRUPO
+# ============================================================
+
+metric_summary <- animal_metrics %>%
+  
+  pivot_longer(
+    
+    cols = c(
+      peak,
+      delta_D28_D21,
+      AUC,
+      persistence
+    ),
+    
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  
+  group_by(
+    Grupo,
+    Metric
+  ) %>%
+  
   summarise(
-    baseline_d0 = Absorbancia[Tiempo == 0][1],
-    day14 = Absorbancia[Tiempo == 14][1],
-    day21 = Absorbancia[Tiempo == 21][1],
-    day28 = Absorbancia[Tiempo == 28][1],
-    day56 = Absorbancia[Tiempo == 56][1],
-    primary_peak_0_21 = max(Absorbancia[Tiempo <= 21]),
-    post_peak_28_56 = max(Absorbancia[Tiempo >= 28]),
-    total_peak = max(Absorbancia),
-    time_to_peak = Tiempo[which.max(Absorbancia)][1],
-    booster_delta_21_28 = day28 - day21,
-    late_delta_28_56 = day56 - day28,
-    persistence_ratio_56_peak = day56 / total_peak,
-    auc_0_21 = pracma::trapz(Tiempo[Tiempo <= 21], Absorbancia[Tiempo <= 21]),
-    auc_21_56 = pracma::trapz(Tiempo[Tiempo >= 21], Absorbancia[Tiempo >= 21]),
-    auc_total = pracma::trapz(Tiempo, Absorbancia),
+    
+    n = sum(!is.na(Value)),
+    
+    mean = mean(
+      Value,
+      na.rm = TRUE
+    ),
+    
+    sd = sd(
+      Value,
+      na.rm = TRUE
+    ),
+    
+    se = sd / sqrt(n),
+    
+    lower = mean -
+      qt(
+        0.975,
+        df = pmax(n - 1, 1)
+      ) * se,
+    
+    upper = mean +
+      qt(
+        0.975,
+        df = pmax(n - 1, 1)
+      ) * se,
+    
     .groups = "drop"
   )
-write_csv(animal_metrics, file.path(tables_dir, "02_metricas_cineticas_por_animal.csv"))
 
-fit_lme <- function(expr, data, method = "REML", correlation = NULL) {
-  tryCatch(
-    nlme::lme(
+
+# ============================================================
+# 17. MODELOS MIXTOS
+# ============================================================
+
+fit_lme <- function(
+    expr,
+    data,
+    method = "REML",
+    correlation = NULL
+) {
+  
+  tryCatch({
+    
+    model <- nlme::lme(
       fixed = expr,
-      random = ~ 1 | Animal,
+      random = ~1 | Animal,
       data = data,
       method = method,
       correlation = correlation,
-      control = lmeControl(opt = "optim", maxIter = 200, msMaxIter = 200)
-    ),
-    error = function(e) NULL
-  )
+      na.action = na.omit,
+      keep.data = TRUE
+    )
+    
+    return(model)
+    
+  }, error = function(e) {
+    
+    message(
+      "No se pudo ajustar el modelo: ",
+      conditionMessage(e)
+    )
+    
+    return(NULL)
+  })
 }
+
+
+# ============================================================
+# 18. MODELOS CANDIDATOS
+# ============================================================
 
 model_candidates <- list(
-  measured_time = fit_lme(Absorbancia ~ Grupo * TiempoF, datos, "ML"),
-  measured_time_ar1 = fit_lme(Absorbancia ~ Grupo * TiempoF, datos, "ML", corAR1(form = ~ TimeIndex | Animal)),
-  spline_df3 = fit_lme(Absorbancia ~ Grupo * ns(Tiempo, df = 3), datos, "ML"),
-  spline_df4 = fit_lme(Absorbancia ~ Grupo * ns(Tiempo, df = 4), datos, "ML"),
-  cubic = fit_lme(Absorbancia ~ Grupo * poly(Tiempo, 3), datos, "ML")
-)
-
-model_comparison <- bind_rows(lapply(names(model_candidates), function(nm) {
-  fit <- model_candidates[[nm]]
-  if (is.null(fit)) {
-    data.frame(model = nm, converged = FALSE, AIC = NA_real_, BIC = NA_real_, logLik = NA_real_)
-  } else {
-    data.frame(model = nm, converged = TRUE, AIC = AIC(fit), BIC = BIC(fit), logLik = as.numeric(logLik(fit)))
-  }
-})) |>
-  arrange(AIC)
-write_csv(model_comparison, file.path(tables_dir, "03_comparacion_modelos_mixtos_AIC.csv"))
-
-final_time_model <- fit_lme(Absorbancia ~ Grupo * TiempoF, datos, "REML")
-saveRDS(final_time_model, file.path(models_dir, "modelo_mixto_tiempo_medido_REML.rds"))
-
-anova_time <- as.data.frame(anova(final_time_model)) |>
-  tibble::rownames_to_column("term")
-write_csv(anova_time, file.path(tables_dir, "04_anova_modelo_mixto_tiempo_medido.csv"))
-
-emm_day <- emmeans(final_time_model, ~ Grupo | TiempoF, data = datos)
-emm_day_table <- as.data.frame(summary(emm_day, infer = TRUE)) |>
-  rename(Tiempo = TiempoF)
-write_csv(emm_day_table, file.path(tables_dir, "05_medias_marginales_por_dia.csv"))
-
-pairwise_day <- as.data.frame(summary(pairs(emm_day, adjust = "tukey"))) |>
-  rename(Tiempo = TiempoF)
-write_csv(pairwise_day, file.path(tables_dir, "06_comparaciones_tukey_por_dia.csv"))
-
-metric_tests <- function(metric, data = animal_metrics |> filter(Grupo != "Control") |> droplevels()) {
-  f <- reformulate("Grupo", response = metric)
-  fit <- lm(f, data = data)
-  emm <- emmeans(fit, ~ Grupo, data = data)
-  list(
-    anova = broom::tidy(anova(fit)) |> mutate(metric = metric, .before = 1),
-    contrasts = as.data.frame(summary(pairs(emm, adjust = "tukey"))) |> mutate(metric = metric, .before = 1),
-    means = as.data.frame(summary(emm, infer = TRUE)) |> mutate(metric = metric, .before = 1)
-  )
-}
-
-metrics_to_test <- c(
-  "primary_peak_0_21", "post_peak_28_56", "booster_delta_21_28",
-  "late_delta_28_56", "persistence_ratio_56_peak", "auc_0_21",
-  "auc_21_56", "auc_total"
-)
-metric_results <- lapply(metrics_to_test, metric_tests)
-write_csv(bind_rows(lapply(metric_results, `[[`, "anova")), file.path(tables_dir, "07_anova_metricas_por_animal.csv"))
-write_csv(bind_rows(lapply(metric_results, `[[`, "contrasts")), file.path(tables_dir, "08_tukey_metricas_por_animal.csv"))
-write_csv(bind_rows(lapply(metric_results, `[[`, "means")), file.path(tables_dir, "09_medias_marginales_metricas.csv"))
-
-dose_trend_data <- animal_metrics |>
-  filter(Grupo %in% c("25ug", "50ug", "100ug")) |>
-  mutate(Dose = as.numeric(sub("ug", "", as.character(Grupo))))
-dose_trends <- bind_rows(lapply(metrics_to_test, function(metric) {
-  fit <- lm(reformulate("Dose", response = metric), data = dose_trend_data)
-  broom::tidy(fit) |>
-    filter(term == "Dose") |>
-    mutate(metric = metric, .before = 1, r_squared = summary(fit)$r.squared)
-}))
-write_csv(dose_trends, file.path(tables_dir, "10_tendencia_dosis_recombinantes.csv"))
-
-group_means <- datos_vac |>
-  group_by(Grupo, Tiempo) |>
-  summarise(Absorbancia = mean(Absorbancia), .groups = "drop")
-
-fit_nls_models <- function(df) {
-  y_min <- min(df$Absorbancia)
-  y_max <- max(df$Absorbancia)
-  amp <- max(y_max - y_min, 0.1)
-  safe_nls <- function(formula, start, lower, upper, model_name) {
-    fit <- tryCatch(
-      suppressWarnings(nls(
-        formula,
-        data = df,
-        start = start,
-        algorithm = "port",
-        lower = lower,
-        upper = upper,
-        control = nls.control(maxiter = 500, warnOnly = TRUE)
-      )),
-      error = function(e) NULL
-    )
-    if (is.null(fit)) return(NULL)
-    pred <- predict(fit, df)
-    list(
-      model = model_name,
-      fit = fit,
-      params = coef(fit),
-      AIC = AIC(fit),
-      RSS = sum(resid(fit)^2),
-      RMSE = sqrt(mean(resid(fit)^2)),
-      R2 = 1 - sum((df$Absorbancia - pred)^2) / sum((df$Absorbancia - mean(df$Absorbancia))^2)
-    )
-  }
-
-  list(
-    Logistic = safe_nls(
-      Absorbancia ~ Bottom + (Top - Bottom) / (1 + exp(-(Tiempo - T50) / s)),
-      start = list(Bottom = y_min, Top = y_max, T50 = 18, s = 3),
-      lower = c(Bottom = 0, Top = 0.3, T50 = 0, s = 0.2),
-      upper = c(Bottom = 1.0, Top = 3.0, T50 = 56, s = 20),
-      model_name = "Logistic"
-    ),
-    Gompertz = safe_nls(
-      Absorbancia ~ Bottom + A * exp(-exp(-k * (Tiempo - Ti))),
-      start = list(Bottom = y_min, A = amp, k = 0.25, Ti = 14),
-      lower = c(Bottom = 0, A = 0.1, k = 0.001, Ti = 0),
-      upper = c(Bottom = 1.0, A = 3.0, k = 2.0, Ti = 56),
-      model_name = "Gompertz"
-    ),
-    Weibull = safe_nls(
-      Absorbancia ~ Bottom + A * (1 - exp(-(Tiempo / lambda)^beta)),
-      start = list(Bottom = y_min, A = amp, lambda = 16, beta = 3),
-      lower = c(Bottom = 0, A = 0.1, lambda = 1, beta = 0.2),
-      upper = c(Bottom = 1.0, A = 3.0, lambda = 80, beta = 20),
-      model_name = "Weibull"
-    )
-  )
-}
-
-nls_fits <- lapply(split(group_means, group_means$Grupo), fit_nls_models)
-nls_summary <- bind_rows(lapply(names(nls_fits), function(grp) {
-  bind_rows(lapply(nls_fits[[grp]], function(x) {
-    if (is.null(x)) return(NULL)
-    data.frame(Grupo = grp, Modelo = x$model, AIC = x$AIC, RSS = x$RSS, RMSE = x$RMSE, R2 = x$R2)
-  }))
-})) |>
-  group_by(Grupo) |>
-  mutate(delta_AIC = AIC - min(AIC, na.rm = TRUE), best_model = delta_AIC == 0) |>
-  ungroup() |>
-  arrange(Grupo, AIC)
-write_csv(nls_summary, file.path(tables_dir, "11_comparacion_modelos_no_lineales_promedio.csv"))
-
-best_nls <- nls_summary |>
-  filter(best_model) |>
-  select(Grupo, Modelo)
-
-extract_nls_params <- function(grp, model_name) {
-  fit_obj <- nls_fits[[grp]][[model_name]]
-  p <- fit_obj$params
-  out <- data.frame(Grupo = grp, Modelo = model_name, parametro = names(p), valor = as.numeric(p))
-  if (model_name == "Logistic") {
-    derived <- data.frame(
-      Grupo = grp, Modelo = model_name,
-      parametro = c("amplitud", "max_velocity_abs_per_day"),
-      valor = c(unname(p["Top"] - p["Bottom"]), unname((p["Top"] - p["Bottom"]) / (4 * p["s"])))
-    )
-    out <- bind_rows(out, derived)
-  }
-  if (model_name == "Gompertz") {
-    derived <- data.frame(
-      Grupo = grp, Modelo = model_name,
-      parametro = c("Top_asymptote", "max_velocity_abs_per_day"),
-      valor = c(unname(p["Bottom"] + p["A"]), unname(p["A"] * p["k"] / exp(1)))
-    )
-    out <- bind_rows(out, derived)
-  }
-  if (model_name == "Weibull") {
-    derived <- data.frame(
-      Grupo = grp, Modelo = model_name,
-      parametro = c("Top_asymptote"),
-      valor = c(unname(p["Bottom"] + p["A"]))
-    )
-    out <- bind_rows(out, derived)
-  }
-  out
-}
-
-nls_parameters <- bind_rows(mapply(
-  extract_nls_params,
-  as.character(best_nls$Grupo),
-  as.character(best_nls$Modelo),
-  SIMPLIFY = FALSE
-))
-write_csv(nls_parameters, file.path(tables_dir, "12_parametros_modelos_no_lineales.csv"))
-
-x_pred <- seq(min(datos$Tiempo), max(datos$Tiempo), length.out = 300)
-nls_predictions <- bind_rows(lapply(seq_len(nrow(best_nls)), function(i) {
-  grp <- as.character(best_nls$Grupo[i])
-  model_name <- as.character(best_nls$Modelo[i])
-  fit <- nls_fits[[grp]][[model_name]]$fit
-  nd <- data.frame(Tiempo = x_pred)
-  data.frame(Grupo = grp, Modelo = model_name, Tiempo = x_pred, Absorbancia = as.numeric(predict(fit, nd)))
-}))
-nls_predictions$Grupo <- factor(nls_predictions$Grupo, levels = c("25ug", "50ug", "100ug", "Commercial"))
-group_means$Grupo <- factor(group_means$Grupo, levels = c("25ug", "50ug", "100ug", "Commercial"))
-
-pred_grid <- expand.grid(
-  Tiempo = x_pred,
-  Grupo = levels(datos$Grupo),
-  KEEP.OUT.ATTRS = FALSE
-) |>
-  mutate(
-    Animal = datos$Animal[1],
-    TiempoF = factor(round(Tiempo / 7) * 7, levels = levels(datos$TiempoF)),
-    TimeIndex = as.numeric(factor(round(Tiempo / 7) * 7, levels = tiempos))
-  )
-
-spline_plot_model <- fit_lme(Absorbancia ~ Grupo * ns(Tiempo, df = 4), datos, "REML")
-pred_grid$fit <- predict(spline_plot_model, newdata = pred_grid, level = 0)
-
-fig1 <- ggplot() +
-  geom_line(
-    data = datos,
-    aes(Tiempo, Absorbancia, group = Animal, color = Grupo),
-    linewidth = 0.25, alpha = 0.25
-  ) +
-  geom_point(
-    data = datos,
-    aes(Tiempo, Absorbancia, color = Grupo),
-    size = 1.2, alpha = 0.42
-  ) +
-  geom_ribbon(
-    data = mean_ci,
-    aes(Tiempo, ymin = lower, ymax = upper, fill = Grupo),
-    alpha = 0.13, linewidth = 0
-  ) +
-  geom_line(
-    data = mean_ci,
-    aes(Tiempo, mean, color = Grupo),
-    linewidth = 0.75
-  ) +
-  geom_vline(xintercept = 21, linetype = "dashed", linewidth = 0.35, color = "grey40") +
-  scale_color_manual(values = palette_nature, drop = FALSE) +
-  scale_fill_manual(values = palette_nature, drop = FALSE) +
-  scale_x_continuous(breaks = tiempos, expand = expansion(mult = c(0.01, 0.03))) +
-  scale_y_continuous(breaks = seq(0, 2.0, 0.5), expand = expansion(mult = c(0, 0.03))) +
-  coord_cartesian(ylim = c(0, 2.15)) +
-  labs(x = "Time after first immunization (days)", y = "ELISA absorbance (450 nm)") +
-  theme_nature(8)
-save_nature(fig1, "Figure_1_observed_ELISA_kinetics", 7.2, 3.6)
-
-fig2_data <- animal_metrics |>
-  filter(Grupo != "Control") |>
-  select(Grupo, Animal, primary_peak_0_21, booster_delta_21_28, auc_total, persistence_ratio_56_peak) |>
-  pivot_longer(
-    cols = c(primary_peak_0_21, booster_delta_21_28, auc_total, persistence_ratio_56_peak),
-    names_to = "Metric",
-    values_to = "Value"
-  ) |>
-  mutate(
-    Metric = factor(
-      Metric,
-      levels = c("primary_peak_0_21", "booster_delta_21_28", "auc_total", "persistence_ratio_56_peak"),
-      labels = c("Primary peak\n(days 0-21)", "Net rise\n(day 21-28)", "Total AUC\n(days 0-56)", "Persistence\n(day 56 / peak)")
-    )
-  )
-
-fig2 <- ggplot(fig2_data, aes(Grupo, Value, color = Grupo, fill = Grupo)) +
-  geom_boxplot(width = 0.52, outlier.shape = NA, alpha = 0.16, linewidth = 0.35) +
-  geom_point(position = position_jitter(width = 0.09, height = 0), size = 1.6, alpha = 0.8) +
-  facet_wrap(~ Metric, scales = "free_y", nrow = 1) +
-  scale_color_manual(values = palette_nature, drop = FALSE) +
-  scale_fill_manual(values = palette_nature, drop = FALSE) +
-  labs(x = NULL, y = NULL) +
-  theme_nature(8) +
-  theme(
-    legend.position = "none",
-    axis.text.x = element_text(angle = 35, hjust = 1)
-  )
-save_nature(fig2, "Figure_2_animal_level_kinetic_metrics", 7.2, 3.2)
-
-fig3 <- ggplot() +
-  geom_point(data = group_means, aes(Tiempo, Absorbancia, color = Grupo), size = 1.7) +
-  geom_line(data = nls_predictions, aes(Tiempo, Absorbancia, color = Grupo), linewidth = 0.8) +
-  facet_wrap(~ Grupo, nrow = 1) +
-  scale_color_manual(values = palette_nature[-1], drop = FALSE) +
-  scale_x_continuous(breaks = c(0, 14, 28, 42, 56), expand = expansion(mult = c(0.02, 0.04))) +
-  scale_y_continuous(breaks = seq(0, 2.0, 0.5), expand = expansion(mult = c(0, 0.03))) +
-  coord_cartesian(ylim = c(0, 2.15)) +
-  labs(x = "Time after first immunization (days)", y = "Mean absorbance (450 nm)") +
-  theme_nature(8) +
-  theme(legend.position = "none")
-save_nature(fig3, "Figure_3_best_nonlinear_mean_fits", 7.2, 2.7)
-
-sig_day <- pairwise_day |>
-  filter(grepl("Commercial|25ug|50ug|100ug", contrast)) |>
-  mutate(
-    p_label = case_when(
-      p.value < 0.001 ~ "<0.001",
-      p.value < 0.01 ~ "<0.01",
-      p.value < 0.05 ~ "<0.05",
-      TRUE ~ "ns"
-    ),
-    neg_log10_p = -log10(pmax(p.value, 1e-4))
-  )
-write_csv(sig_day, file.path(tables_dir, "13_mapa_significancia_comparaciones_por_dia.csv"))
-
-interpretation <- tibble::tribble(
-  ~hallazgo, ~soporte_estadistico, ~implicacion_biologica,
-  "Las vacunas recombinantes muestran seroconversion temprana fuerte antes del refuerzo.",
-  "El modelo mixto por dia y las medias marginales separan los grupos recombinantes del control y de Commercial desde los dias 14-21.",
-  "La formulacion recombinante induce una respuesta primaria rapida, compatible con reconocimiento temprano del antigeno vacunal.",
-  "La vacuna Commercial presenta cinetica retardada en este diseno.",
-  "Las curvas promedio no lineales estiman T50 mas tardio para Commercial que para 25ug, 50ug y 100ug.",
-  "Su unica dosis produce una fase ascendente posterior al dia 21, por lo que no es biologicamente comparable a un esquema prime-boost en tiempos tempranos.",
-  "La magnitud acumulada se evalua mejor con AUC por animal que con un unico punto final.",
-  "ANOVA/Tukey de auc_total y auc_21_56 cuantifica diferencias integradas entre grupos vacunales.",
-  "AUC resume cantidad y duracion de anticuerpos, una lectura mas cercana a exposicion humoral sostenida que el pico aislado.",
-  "La persistencia al dia 56 es alta en los grupos recombinantes.",
-  "La razon dia56/pico por animal captura mantenimiento de respuesta tras alcanzar meseta.",
-  "Una razon cercana a 1 indica que la respuesta no decae marcadamente dentro de los 56 dias medidos.",
-  "La inferencia para Commercial y Control debe interpretarse con cautela.",
-  "Los tamanos muestrales son pequenos: Commercial n=3 y Control n=2.",
-  "Los resultados son utiles para describir tendencias biologicas, pero conviene validarlos con mas animales si se busca una conclusion confirmatoria."
-)
-write_csv(interpretation, file.path(tables_dir, "14_implicacion_biologica_resumen.csv"))
-
-sink(file.path(out_dir, "RESUMEN_ANALISIS_MEJORADO.txt"))
-cat("Analisis mejorado de cinetica ELISA\n")
-cat("====================================\n\n")
-cat("Datos:\n")
-print(table(datos$Grupo, datos$Tiempo))
-cat("\nComparacion de modelos mixtos por AIC:\n")
-print(model_comparison)
-cat("\nANOVA del modelo mixto saturado por dia medido:\n")
-print(anova(final_time_model))
-cat("\nANOVA de metricas por animal:\n")
-print(read_csv(file.path(tables_dir, "07_anova_metricas_por_animal.csv"), show_col_types = FALSE))
-cat("\nTendencia lineal de dosis en recombinantes:\n")
-print(dose_trends)
-cat("\nMejores modelos no lineales por grupo:\n")
-print(nls_summary |> filter(best_model))
-cat("\nParametros no lineales derivados:\n")
-print(nls_parameters)
-cat("\nInterpretacion biologica:\n")
-print(interpretation, n = Inf)
-sink()
-
-message("Analysis complete. Results written to: ", out_dir)
-
-
-
-# 1. Asegurar que los factores incluyan al grupo Control en la base de la jerarquía
-datos$Grupo <- factor(datos$Grupo, levels = c("Control", "25ug", "50ug", "100ug", "Commercial"))
-mean_ci$Grupo <- factor(mean_ci$Grupo, levels = c("Control", "25ug", "50ug", "100ug", "Commercial"))
-nls_predictions$Grupo <- factor(nls_predictions$Grupo, levels = c("25ug", "50ug", "100ug", "Commercial"))
-
-fig3_final_con_control <- ggplot() +
-  # A. PUNTOS INDIVIDUALES (Fondo): Todos los animales, incluido el Control, con sutil jitter
-  geom_jitter(
-    data = datos,
-    aes(x = Tiempo, y = Absorbancia, color = Grupo),
-    size = 0.9,
-    alpha = 0.15,
-    width = 0.6,
-    height = 0
-  ) +
   
-  # B. LÍNEA EMPÍRICA DEL GRUPO CONTROL: Conecta los promedios observados del Control punto a punto
-  geom_line(
-    data = mean_ci |> filter(Grupo == "Control"),
-    aes(x = Tiempo, y = mean, color = Grupo),
-    linewidth = 0.6,
-    linetype = "twodash", # Estilo de línea diferente para dejar en claro que no es un modelo NLS
-    alpha = 0.7
-  ) +
-  
-  # C. LÍNEAS MODELADAS NO LINEALES (Frente): Curvas continuas para los grupos vacunados
-  geom_line(
-    data = nls_predictions, 
-    aes(x = Tiempo, y = Absorbancia, color = Grupo), 
-    linewidth = 0.95, 
-    alpha = 0.95
-  ) +
-  
-  # D. PUNTOS PROMEDIO (Medio): Marcadores de tendencia central para TODOS los grupos
-  geom_point(
-    data = mean_ci, 
-    aes(x = Tiempo, y = mean, color = Grupo), 
-    size = 2.0, 
-    alpha = 0.75, 
-    shape = 16
-  ) +
-  
-  # E. LÍNEA VERTICAL DEL BOOSTER (Día 21)
-  geom_vline(
-    xintercept = 21, 
-    linetype = "dashed", 
-    linewidth = 0.35, 
-    color = "grey40",
-    alpha = 0.5
-  ) +
-  
-  # F. ANOTACIÓN TEXTO "Booster"
-  annotate(
-    "text", 
-    x = 22, 
-    y = 2.0, 
-    label = "Booster", 
-    hjust = 0, 
-    vjust = 1, 
-    size = 2.5, 
-    fontface = "italic", 
-    color = "grey30"
-  ) +
-  
-  # G. PALETAS Y ESCALAS: Usamos 'palette_nature' completa (con Control incluido)
-  scale_color_manual(values = palette_nature) + 
-  scale_x_continuous(
-    breaks = c(0, 7, 14, 21, 28, 35, 42, 49, 56), 
-    expand = expansion(mult = c(0.02, 0.04))
-  ) +
-  scale_y_continuous(
-    breaks = seq(0, 2.0, 0.5), 
-    expand = expansion(mult = c(0, 0.03))
-  ) +
-  coord_cartesian(ylim = c(0, 2.15)) +
-  
-  labs(
-    x = "Time after first immunization (days)", 
-    y = "Anti-E2 IgG (Absorbance, 450 nm)",
-    color = "Vaccine Group"
-  ) +
-  
-  theme_nature(8) +
-  theme(
-    legend.position = "top",
-    legend.justification = "center"
-  )
-
-# Guardar la versión definitiva apta para publicación
-save_nature(fig3_final_con_control, "Figure_3_unified_nonlinear_fits_with_control", 5.4, 4.0)
-
-
-
-
-
-
-library(ggplot2)
-library(dplyr)
-library(tidyr)
-library(emmeans)
-library(purrr)
-library(patchwork)
-
-# 1. Asegurar el orden de los factores
-animal_metrics$Grupo <- factor(animal_metrics$Grupo, levels = c("Control", "25ug", "50ug", "100ug", "Commercial"))
-
-# Definir las 4 métricas con sus respectivos labels de eje Y específicos
-metrics_to_plot <- c("primary_peak_0_21", "booster_delta_21_28", "auc_total", "persistence_ratio_56_peak")
-
-# Modificación en la lista de metadatos de los ejes Y
-metric_metadata <- list(
-  "primary_peak_0_21" = list(
-    title = "Primary peak\n(days 0-21)",
-    ylabel = "Anti-E2 Antibodies (Absorbance, 450 nm)"
+  measured_time = fit_lme(
+    Absorbancia ~ Grupo * TiempoF,
+    datos,
+    method = "ML"
   ),
-  "booster_delta_21_28" = list(
-    title = "Net rise\n(day 21-28)",
-    ylabel = "Net Increase (Abs D28 - Abs D21)" # Fórmula añadida
+  
+  measured_time_AR1 = fit_lme(
+    Absorbancia ~ Grupo * TiempoF,
+    datos,
+    method = "ML",
+    correlation = corAR1(
+      form = ~TimeIndex | Animal
+    )
   ),
-  "auc_total" = list(
-    title = "Total AUC\n(days 0-56)",
-    ylabel = "Total Antibody Exposure (Absorbance x Days)"
+  
+  spline_df3 = fit_lme(
+    Absorbancia ~ Grupo * ns(
+      Tiempo,
+      df = 3
+    ),
+    datos,
+    method = "ML"
   ),
-  "persistence_ratio_56_peak" = list(
-    title = "Persistence\n(day 56 / peak)",
-    ylabel = "Persistence Ratio (Abs D56 / Max Peak)" # Fórmula añadida
+  
+  spline_df4 = fit_lme(
+    Absorbancia ~ Grupo * ns(
+      Tiempo,
+      df = 4
+    ),
+    datos,
+    method = "ML"
+  ),
+  
+  cubic = fit_lme(
+    Absorbancia ~ Grupo * poly(
+      Tiempo,
+      3
+    ),
+    datos,
+    method = "ML"
   )
 )
 
-# [El resto del código de la función 'generate_individual_boxplot' y el ensamblado final se mantiene exactamente igual]
 
-# 2. Función para generar cada gráfico con su propia unidad en el eje Y
-generate_individual_boxplot <- function(metric_name, meta) {
-  
-  # Filtrar datos crudos para este panel
-  plot_data <- animal_metrics |> 
-    select(Grupo, Value = .data[[metric_name]]) |> 
-    filter(!is.na(Value))
-  
-  # Calcular estadística EXCLUYENDO al grupo Control
-  stats_data <- plot_data |> filter(Grupo != "Control") |> droplevels()
-  fit <- lm(Value ~ Grupo, data = stats_data)
-  emm <- emmeans(fit, ~ Grupo)
-  pairs_df <- as.data.frame(summary(pairs(emm, adjust = "tukey")))
-  
-  max_y <- max(plot_data$Value, na.rm = TRUE)
-  range_y <- max_y - min(plot_data$Value, na.rm = TRUE)
-  
-  # Configurar barras de comparación vs Commercial (X: Control=1, 25ug=2, 50ug=3, 100ug=4, Commercial=5)
-  comp_metadata <- list(
-    list(g1 = "25ug",  x1 = 2, x2 = 5, row = 1, pair_name = "25ug - Commercial"),
-    list(g1 = "50ug",  x1 = 3, x2 = 5, row = 2, pair_name = "50ug - Commercial"),
-    list(g1 = "100ug", x1 = 4, x2 = 5, row = 3, pair_name = "100ug - Commercial")
-  )
-  
-  lines_and_labels <- map_df(comp_metadata, function(m) {
-    p_val <- pairs_df$p.value[pairs_df$contrast == m$pair_name | pairs_df$contrast == paste0("Commercial - ", m$g1)]
-    if(length(p_val) == 0) {
-      p_val <- pairs_df |> filter(grepl(m$g1, contrast) & grepl("Commercial", contrast)) |> pull(p.value)
+# ============================================================
+# 19. COMPARACIÓN DE MODELOS
+# ============================================================
+
+model_comparison <- map_dfr(
+  names(model_candidates),
+  function(name) {
+    
+    model <- model_candidates[[name]]
+    
+    if (is.null(model)) {
+      
+      return(
+        tibble(
+          Model = name,
+          AIC = NA_real_,
+          BIC = NA_real_,
+          logLik = NA_real_
+        )
+      )
     }
     
-    p_formatted <- if (p_val < 0.001) "p < 0.001" else paste0("p = ", sprintf("%.3f", p_val))
-    y_bar <- max_y + (range_y * 0.09 * m$row)
-    
-    data.frame(
-      x = m$x1, xend = m$x2, y = y_bar,
-      x_text = (m$x1 + m$x2) / 2, y_text = y_bar + (range_y * 0.03),
-      p_label = p_formatted
+    tibble(
+      
+      Model = name,
+      
+      AIC = AIC(model),
+      
+      BIC = BIC(model),
+      
+      logLik = as.numeric(
+        logLik(model)
+      )
     )
-  })
+  }
+) %>%
   
-  ylim_max <- max(lines_and_labels$y_text) + (range_y * 0.05)
+  arrange(AIC)
+
+
+# ============================================================
+# 20. MODELO FINAL
+# ============================================================
+
+final_time_model <- fit_lme(
+  Absorbancia ~ Grupo * TiempoF,
+  datos,
+  method = "REML"
+)
+
+if (!is.null(final_time_model)) {
   
-  # 3. Construir el gráfico con su label de eje Y personalizado
-  p <- ggplot(plot_data, aes(x = Grupo, y = Value, color = Grupo)) +
-    geom_boxplot(aes(fill = Grupo), width = 0.5, outlier.shape = NA, alpha = 0.14, linewidth = 0.4) +
-    geom_point(position = position_jitter(width = 0.1, height = 0), size = 1.3, alpha = 0.75) +
-    
-    geom_segment(data = lines_and_labels, aes(x = x, xend = xend, y = y, yend = y), 
-                 color = "grey35", linewidth = 0.35, inherit.aes = FALSE) +
-    geom_segment(data = lines_and_labels, aes(x = x, xend = x, y = y, yend = y - (range_y * 0.02)), 
-                 color = "grey35", linewidth = 0.35, inherit.aes = FALSE) +
-    geom_segment(data = lines_and_labels, aes(x = xend, xend = xend, y = y, yend = y - (range_y * 0.02)), 
-                 color = "grey35", linewidth = 0.35, inherit.aes = FALSE) +
-    
-    geom_text(data = lines_and_labels, aes(x = x_text, y = y_text, label = p_label), 
-              color = "black", size = 2.2, vjust = 0, fontface = "plain", inherit.aes = FALSE) +
-    
-    scale_color_manual(values = palette_nature, drop = FALSE) +
-    scale_fill_manual(values = palette_nature, drop = FALSE) +
-    coord_cartesian(ylim = c(min(plot_data$Value) - (range_y * 0.05), ylim_max)) +
-    
-    labs(
-      title = meta$title,
-      x = NULL, 
-      y = meta$ylabel # Aquí se aplica el eje Y correcto para cada panel
-    ) +
-    
-    theme_nature(8) +
-    theme(
-      legend.position = "none",
-      plot.title = element_text(face = "bold", size = 8, hjust = 0.5),
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
-      axis.title.y = element_text(size = 7.5, face = "plain"),
-      plot.margin = margin(t = 5, r = 8, b = 5, l = 5)
+  saveRDS(
+    final_time_model,
+    file.path(
+      models_dir,
+      "IgG_modelo_mixto_tiempo_REML.rds"
     )
-  
-  return(p)
+  )
 }
 
-# 4. Generar los paneles independientes mapeando la lista de metadatos
-plot_list <- imap(metric_metadata, ~ generate_individual_boxplot(.y, .x))
 
-# 5. Combinar manteniendo la total independencia de sus ejes Y
-fig2_final_unidades_ok <- patchwork::wrap_plots(plot_list, nrow = 1) + 
-  patchwork::plot_annotation(
-    theme = theme(plot.margin = margin(10, 10, 10, 10))
+# ============================================================
+# 21. ANOVA DEL MODELO FINAL
+# ============================================================
+
+anova_final <- if (
+  !is.null(final_time_model)
+) {
+  
+  as.data.frame(
+    anova(final_time_model)
+  ) %>%
+    tibble::rownames_to_column(
+      "Effect"
+    )
+  
+} else {
+  
+  tibble()
+}
+
+
+# ============================================================
+# 22. EMMEANS POR TIEMPO
+# ============================================================
+
+emmeans_time <- if (
+  !is.null(final_time_model)
+) {
+  
+  emmeans(
+    final_time_model,
+    ~ Grupo | TiempoF,
+    data = datos
+  ) %>%
+    as.data.frame()
+  
+} else {
+  
+  tibble()
+}
+
+
+# ============================================================
+# 23. COMPARACIONES ENTRE GRUPOS
+# ============================================================
+
+pairwise_time <- if (
+  !is.null(final_time_model)
+) {
+  
+  emmeans(
+    final_time_model,
+    ~ Grupo | TiempoF,
+    data = datos
+  ) %>%
+    pairs(
+      adjust = "tukey"
+    ) %>%
+    as.data.frame()
+  
+} else {
+  
+  tibble()
+}
+
+# ============================================================
+# 24. MÉTRICAS: MODELOS POR VARIABLE
+# ============================================================
+
+metric_names <- c(
+  "peak",
+  "delta_D28_D21",
+  "AUC",
+  "persistence"
+)
+
+
+metric_models <- list()
+
+
+metric_tests <- map_dfr(
+  metric_names,
+  function(metric) {
+    
+    formula <- as.formula(
+      paste(
+        metric,
+        "~ Grupo"
+      )
+    )
+    
+    data_metric <- animal_metrics %>%
+      
+      filter(
+        !is.na(
+          .data[[metric]]
+        )
+      )
+    
+    if (
+      nrow(data_metric) < 3
+    ) {
+      return(
+        tibble()
+      )
+    }
+    
+    model <- lm(
+      formula,
+      data = data_metric
+    )
+    
+    metric_models[[metric]] <<- model
+    
+    broom::tidy(
+      anova(model)
+    ) %>%
+      
+      mutate(
+        Metric = metric,
+        .before = 1
+      )
+  }
+)
+
+
+# ============================================================
+# 25. EMMEANS PARA MÉTRICAS
+# ============================================================
+
+metric_emmeans <- map_dfr(
+  metric_names,
+  function(metric) {
+    
+    data_metric <- animal_metrics %>%
+      
+      filter(
+        !is.na(
+          .data[[metric]]
+        )
+      )
+    
+    if (
+      nrow(data_metric) < 3
+    ) {
+      return(
+        tibble()
+      )
+    }
+    
+    formula <- as.formula(
+      paste(
+        metric,
+        "~ Grupo"
+      )
+    )
+    
+    model <- lm(
+      formula,
+      data = data_metric
+    )
+    
+    emmeans(
+      model,
+      ~Grupo
+    ) %>%
+      
+      pairs(
+        adjust = "tukey"
+      ) %>%
+      
+      as.data.frame() %>%
+      
+      mutate(
+        Metric = metric,
+        .before = 1
+      )
+  }
+)
+
+
+# ============================================================
+# 26. TENDENCIA DE DOSIS
+# ============================================================
+
+dose_data <- animal_metrics %>%
+  
+  filter(
+    Grupo %in% c(
+      "25ug",
+      "50ug",
+      "100ug"
+    )
+  ) %>%
+  
+  mutate(
+    
+    Dose = case_when(
+      
+      Grupo == "25ug" ~ 25,
+      
+      Grupo == "50ug" ~ 50,
+      
+      Grupo == "100ug" ~ 100
+      
+    )
   )
 
-# 6. Guardar la figura corregida
-save_nature(fig2_final_unidades_ok, "Figure_2_animal_metrics_correct_units", 9.2, 3.8)
+
+dose_tests <- map_dfr(
+  metric_names,
+  function(metric) {
+    
+    d <- dose_data %>%
+      
+      filter(
+        !is.na(
+          .data[[metric]]
+        )
+      )
+    
+    if (
+      nrow(d) < 3
+    ) {
+      return(
+        tibble()
+      )
+    }
+    
+    formula <- as.formula(
+      paste(
+        metric,
+        "~ Dose"
+      )
+    )
+    
+    model <- lm(
+      formula,
+      data = d
+    )
+    
+    broom::tidy(
+      model
+    ) %>%
+      
+      mutate(
+        Metric = metric,
+        .before = 1
+      )
+  }
+)
+
+
+# ============================================================
+# 27. MODELOS NO LINEALES SOBRE LAS MEDIAS
+# ============================================================
+
+nls_data <- mean_ci %>%
+  
+  filter(
+    !is.na(mean)
+  )
+
+
+# ------------------------------------------------------------
+# Modelo logístico
+# ------------------------------------------------------------
+
+logistic_model <- tryCatch(
+  
+  nls(
+    mean ~
+      A /
+      (
+        1 +
+          exp(
+            -(Tiempo - T50) / k
+          )
+      ),
+    
+    data = nls_data,
+    
+    start = list(
+      A = max(
+        nls_data$mean,
+        na.rm = TRUE
+      ),
+      T50 = median(
+        nls_data$Tiempo
+      ),
+      k = 10
+    ),
+    
+    control = nls.control(
+      maxiter = 1000
+    )
+  ),
+  
+  error = function(e) NULL
+)
+
+
+# ------------------------------------------------------------
+# Modelo Gompertz
+# ------------------------------------------------------------
+
+gompertz_model <- tryCatch(
+  
+  nls(
+    mean ~
+      A *
+      exp(
+        -exp(
+          -(Tiempo - T50) / k
+        )
+      ),
+    
+    data = nls_data,
+    
+    start = list(
+      A = max(
+        nls_data$mean,
+        na.rm = TRUE
+      ),
+      T50 = median(
+        nls_data$Tiempo
+      ),
+      k = 10
+    ),
+    
+    control = nls.control(
+      maxiter = 1000
+    )
+  ),
+  
+  error = function(e) NULL
+)
+
+
+# ------------------------------------------------------------
+# Modelo Weibull
+# ------------------------------------------------------------
+
+weibull_model <- tryCatch(
+  
+  nls(
+    mean ~
+      A *
+      (
+        1 -
+          exp(
+            -(Tiempo / lambda)^k
+          )
+      ),
+    
+    data = nls_data,
+    
+    start = list(
+      A = max(
+        nls_data$mean,
+        na.rm = TRUE
+      ),
+      lambda = median(
+        nls_data$Tiempo[
+          nls_data$Tiempo > 0
+        ]
+      ),
+      k = 2
+    ),
+    
+    control = nls.control(
+      maxiter = 1000
+    )
+  ),
+  
+  error = function(e) NULL
+)
+
+
+# ============================================================
+# 28. COMPARACIÓN DE MODELOS NLS
+# ============================================================
+
+nls_models <- list(
+  
+  Logistic = logistic_model,
+  
+  Gompertz = gompertz_model,
+  
+  Weibull = weibull_model
+)
+
+
+nls_comparison <- map_dfr(
+  names(nls_models),
+  function(name) {
+    
+    model <- nls_models[[name]]
+    
+    if (is.null(model)) {
+      
+      return(
+        tibble(
+          Model = name,
+          AIC = NA_real_,
+          RSS = NA_real_,
+          RMSE = NA_real_,
+          R2_pseudo = NA_real_
+        )
+      )
+    }
+    
+    residuals_model <- residuals(model)
+    
+    fitted_model <- fitted(model)
+    
+    rss <- sum(
+      residuals_model^2
+    )
+    
+    rmse <- sqrt(
+      mean(
+        residuals_model^2
+      )
+    )
+    
+    tss <- sum(
+      (
+        nls_data$mean -
+          mean(nls_data$mean)
+      )^2
+    )
+    
+    r2 <- 1 - rss / tss
+    
+    tibble(
+      
+      Model = name,
+      
+      AIC = AIC(model),
+      
+      RSS = rss,
+      
+      RMSE = rmse,
+      
+      R2_pseudo = r2
+    )
+  }
+) %>%
+  
+  arrange(AIC)
+
+
+# ============================================================
+# 29. PARÁMETROS NLS
+# ============================================================
+
+nls_parameters <- map_dfr(
+  names(nls_models),
+  function(name) {
+    
+    model <- nls_models[[name]]
+    
+    if (is.null(model)) {
+      
+      return(
+        tibble()
+      )
+    }
+    
+    broom::tidy(model) %>%
+      
+      mutate(
+        Model = name,
+        .before = 1
+      )
+  }
+)
+
+
+# ============================================================
+# 30. PREDICCIONES NLS
+# ============================================================
+
+prediction_grid <- tibble(
+  
+  Tiempo = seq(
+    min(nls_data$Tiempo),
+    max(nls_data$Tiempo),
+    length.out = 200
+  )
+)
+
+
+nls_predictions <- map_dfr(
+  names(nls_models),
+  function(name) {
+    
+    model <- nls_models[[name]]
+    
+    if (is.null(model)) {
+      return(tibble())
+    }
+    
+    prediction_grid %>%
+      
+      mutate(
+        
+        Predicted = predict(
+          model,
+          newdata = prediction_grid
+        ),
+        
+        Model = name
+      )
+  }
+)
+
+
+# ============================================================
+# 31. FIGURA 1
+# CINÉTICA OBSERVADA
+# ============================================================
+
+fig1 <- ggplot(
+  
+  mean_ci,
+  
+  aes(
+    x = Tiempo,
+    y = mean,
+    color = Grupo,
+    group = Grupo
+  )
+  
+) +
+  
+  geom_ribbon(
+    
+    aes(
+      ymin = lower,
+      ymax = upper,
+      fill = Grupo
+    ),
+    
+    alpha = 0.15,
+    colour = NA
+  ) +
+  
+  geom_line(
+    linewidth = 0.8
+  ) +
+  
+  geom_point(
+    size = 1.8
+  ) +
+  
+  scale_color_manual(
+    values = palette_nature,
+    drop = FALSE
+  ) +
+  
+  scale_fill_manual(
+    values = palette_nature,
+    drop = FALSE
+  ) +
+  
+  labs(
+    
+    title = "Temporal kinetics of anti-E2 IgG",
+    
+    x = "Days post-immunization",
+    
+    y = "Absorbance"
+  ) +
+  
+  theme_nature()
+
+
+save_nature(
+  fig1,
+  "IgG_Figure_1_temporal_kinetics",
+  6,
+  4
+)
+
+
+# ============================================================
+# 32. FIGURA 2
+# MÉTRICAS INDIVIDUALES
+# ============================================================
+
+metric_labels <- c(
+  
+  peak =
+    "Primary peak\nAnti-E2 IgG absorbance",
+  
+  delta_D28_D21 =
+    "Net rise\nD28 - D21",
+  
+  AUC =
+    "Total AUC\nAbsorbance × days",
+  
+  persistence =
+    "Persistence\nD56 / peak"
+)
+
+
+generate_metric_plot <- function(
+    metric_name
+) {
+  
+  d <- animal_metrics %>%
+    
+    filter(
+      !is.na(
+        .data[[metric_name]]
+      )
+    )
+  
+  ggplot(
+    d,
+    aes(
+      x = Grupo,
+      y = .data[[metric_name]],
+      fill = Grupo
+    )
+  ) +
+    
+    geom_boxplot(
+      width = 0.65,
+      outlier.shape = NA
+    ) +
+    
+    geom_jitter(
+      width = 0.08,
+      size = 1.6
+    ) +
+    
+    scale_fill_manual(
+      values = palette_nature,
+      drop = FALSE
+    ) +
+    
+    labs(
+      
+      x = NULL,
+      
+      y = metric_labels[
+        metric_name
+      ]
+    ) +
+    
+    theme_nature() +
+    
+    theme(
+      legend.position = "none"
+    )
+}
+
+
+fig2_peak <- generate_metric_plot(
+  "peak"
+)
+
+fig2_delta <- generate_metric_plot(
+  "delta_D28_D21"
+)
+
+fig2_auc <- generate_metric_plot(
+  "AUC"
+)
+
+fig2_persistence <- generate_metric_plot(
+  "persistence"
+)
+
+
+fig2 <- (
+  
+  fig2_peak |
+    
+    fig2_delta |
+    
+    fig2_auc |
+    
+    fig2_persistence
+  
+) +
+  
+  plot_annotation(
+    title =
+      "Individual-level kinetic metrics"
+  )
+
+
+save_nature(
+  fig2,
+  "IgG_Figure_2_individual_metrics",
+  10,
+  3.2
+)
+
+
+# ============================================================
+# 33. FIGURA 3
+# MODELOS NO LINEALES
+# ============================================================
+
+fig3_data <- mean_ci %>%
+  
+  filter(
+    !is.na(mean)
+  )
+
+
+fig3 <- ggplot() +
+  
+  geom_point(
+    
+    data = fig3_data,
+    
+    aes(
+      x = Tiempo,
+      y = mean,
+      color = Grupo
+    ),
+    
+    size = 1.5
+  ) +
+  
+  geom_line(
+    
+    data = fig3_data,
+    
+    aes(
+      x = Tiempo,
+      y = mean,
+      color = Grupo,
+      group = Grupo
+    ),
+    
+    alpha = 0.4
+  ) +
+  
+  geom_line(
+    
+    data = nls_predictions,
+    
+    aes(
+      x = Tiempo,
+      y = Predicted,
+      linetype = Model
+    ),
+    
+    linewidth = 0.8
+  ) +
+  
+  scale_color_manual(
+    values = palette_nature,
+    drop = FALSE
+  ) +
+  
+  labs(
+    
+    title =
+      "Nonlinear models of temporal IgG kinetics",
+    
+    x =
+      "Days post-immunization",
+    
+    y =
+      "Mean absorbance",
+    
+    linetype =
+      "Model"
+  ) +
+  
+  theme_nature()
+
+
+save_nature(
+  fig3,
+  "IgG_Figure_3_nonlinear_models",
+  6,
+  4
+)
+
+
+# ============================================================
+# 34. TABLA DE DATOS
+# ============================================================
+
+datos_export <- datos %>%
+  
+  mutate(
+    Grupo = as.character(Grupo)
+  )
+
+
+# ============================================================
+# 35. TABLA README DEL EXCEL
+# ============================================================
+
+README_excel <- tibble(
+  
+  Sheet = c(
+    "README",
+    "Datos",
+    "Resumen",
+    "Metricas_animal",
+    "Metricas_resumen",
+    "Modelo_mixto",
+    "EMMeans",
+    "Comparaciones_tiempo",
+    "Metricas_ANOVA",
+    "Metricas_comparaciones",
+    "Dosis",
+    "NLS_comparacion",
+    "NLS_parametros",
+    "NLS_predicciones"
+  ),
+  
+  Description = c(
+    
+    "Descripción de las hojas del archivo",
+    
+    "Datos procesados utilizados para el análisis",
+    
+    "Media, SD, SE e IC95% por grupo y tiempo",
+    
+    "Métricas calculadas para cada animal",
+    
+    "Resumen de métricas por grupo",
+    
+    "Comparación de modelos mixtos longitudinales",
+    
+    "Estimated marginal means del modelo final",
+    
+    "Comparaciones Tukey entre grupos por tiempo",
+    
+    "ANOVA de las métricas individuales",
+    
+    "Comparaciones entre grupos para las métricas",
+    
+    "Análisis de tendencia según dosis de antígeno",
+    
+    "Comparación de modelos Logistic, Gompertz y Weibull",
+    
+    "Parámetros estimados de los modelos NLS",
+    
+    "Predicciones de los modelos no lineales"
+  )
+)
+
+
+# ============================================================
+# 36. CREAR ARCHIVO EXCEL DE RESULTADOS
+# ============================================================
+
+output_excel <- file.path(
+  
+  tables_dir,
+  
+  "Curso_temporal_IgG_resultados.xlsx"
+)
+
+
+# Eliminar archivo anterior si existe
+
+if (file.exists(output_excel)) {
+  
+  file.remove(output_excel)
+}
+
+
+wb <- createWorkbook()
+
+
+# ------------------------------------------------------------
+# Función para agregar hojas
+# ------------------------------------------------------------
+
+add_sheet <- function(
+    wb,
+    sheet_name,
+    data
+) {
+  
+  addWorksheet(
+    wb,
+    sheetName = sheet_name
+  )
+  
+  if (nrow(data) > 0) {
+    
+    writeData(
+      wb,
+      sheet = sheet_name,
+      x = data,
+      withFilter = TRUE
+    )
+    
+  } else {
+    
+    writeData(
+      wb,
+      sheet = sheet_name,
+      x = data
+    )
+  }
+  
+  freezePane(
+    wb,
+    sheet = sheet_name,
+    firstRow = TRUE
+  )
+  
+  setColWidths(
+    wb,
+    sheet = sheet_name,
+    cols = 1:ncol(data),
+    widths = "auto"
+  )
+}
+
+
+# ============================================================
+# 37. AGREGAR TODAS LAS HOJAS
+# ============================================================
+
+add_sheet(
+  wb,
+  "README",
+  README_excel
+)
+
+add_sheet(
+  wb,
+  "Datos",
+  datos_export
+)
+
+add_sheet(
+  wb,
+  "Resumen",
+  mean_ci
+)
+
+add_sheet(
+  wb,
+  "Metricas_animal",
+  animal_metrics
+)
+
+add_sheet(
+  wb,
+  "Metricas_resumen",
+  metric_summary
+)
+
+add_sheet(
+  wb,
+  "Modelo_mixto",
+  model_comparison
+)
+
+add_sheet(
+  wb,
+  "EMMeans",
+  emmeans_time
+)
+
+add_sheet(
+  wb,
+  "Comparaciones_tiempo",
+  pairwise_time
+)
+
+add_sheet(
+  wb,
+  "Metricas_ANOVA",
+  metric_tests
+)
+
+add_sheet(
+  wb,
+  "Metricas_comparaciones",
+  metric_emmeans
+)
+
+add_sheet(
+  wb,
+  "Dosis",
+  dose_tests
+)
+
+add_sheet(
+  wb,
+  "NLS_comparacion",
+  nls_comparison
+)
+
+add_sheet(
+  wb,
+  "NLS_parametros",
+  nls_parameters
+)
+
+add_sheet(
+  wb,
+  "NLS_predicciones",
+  nls_predictions
+)
+
+
+# ============================================================
+# 38. ESTILO DEL EXCEL
+# ============================================================
+
+header_style <- createStyle(
+  
+  textDecoration = "bold",
+  
+  halign = "center",
+  
+  border = "Bottom"
+)
+
+
+for (
+  sheet in names(wb)
+) {
+  
+  addStyle(
+    
+    wb,
+    
+    sheet = sheet,
+    
+    style = header_style,
+    
+    rows = 1,
+    
+    cols = 1:max(
+      1,
+      ncol(
+        readWorkbook(
+          wb,
+          sheet = sheet,
+          rows = 1
+        )
+      )
+    ),
+    
+    gridExpand = TRUE
+  )
+}
+
+
+# ============================================================
+# 39. GUARDAR EXCEL
+# ============================================================
+
+saveWorkbook(
+  
+  wb,
+  
+  output_excel,
+  
+  overwrite = TRUE
+)
+
+
+# ============================================================
+# 40. GUARDAR MODELOS NLS
+# ============================================================
+
+if (!is.null(logistic_model)) {
+  
+  saveRDS(
+    
+    logistic_model,
+    
+    file.path(
+      models_dir,
+      "IgG_NLS_Logistic.rds"
+    )
+  )
+}
+
+
+if (!is.null(gompertz_model)) {
+  
+  saveRDS(
+    
+    gompertz_model,
+    
+    file.path(
+      models_dir,
+      "IgG_NLS_Gompertz.rds"
+    )
+  )
+}
+
+
+if (!is.null(weibull_model)) {
+  
+  saveRDS(
+    
+    weibull_model,
+    
+    file.path(
+      models_dir,
+      "IgG_NLS_Weibull.rds"
+    )
+  )
+}
+
+
+# ============================================================
+# 41. GUARDAR RESUMEN DE EJECUCIÓN
+# ============================================================
+
+analysis_info <- tibble(
+  
+  Item = c(
+    
+    "Analysis",
+    
+    "Input file",
+    
+    "Number of observations",
+    
+    "Number of animals",
+    
+    "Groups",
+    
+    "Time points",
+    
+    "Output Excel",
+    
+    "Figures directory",
+    
+    "Models directory",
+    
+    "Analysis date"
+  ),
+  
+  Value = c(
+    
+    "Temporal anti-E2 IgG analysis",
+    
+    input_file,
+    
+    nrow(datos),
+    
+    n_distinct(datos$Animal),
+    
+    paste(
+      levels(datos$Grupo),
+      collapse = ", "
+    ),
+    
+    paste(
+      sort(unique(datos$Tiempo)),
+      collapse = ", "
+    ),
+    
+    output_excel,
+    
+    figures_dir,
+    
+    models_dir,
+    
+    as.character(
+      Sys.Date()
+    )
+  )
+)
+
+
+write_csv(
+  
+  analysis_info,
+  
+  file.path(
+    tables_dir,
+    "IgG_analysis_info.csv"
+  )
+)
+
+
+# ============================================================
+# 42. MENSAJE FINAL
+# ============================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("ANÁLISIS DE IgG COMPLETADO\n")
+cat("============================================================\n\n")
+
+cat("Archivo Excel generado:\n")
+cat(output_excel, "\n\n")
+
+cat("Figuras guardadas en:\n")
+cat(figures_dir, "\n\n")
+
+cat("Modelos guardados en:\n")
+cat(models_dir, "\n\n")
+
+cat("Hojas incluidas en el Excel:\n")
+
+print(
+  names(wb)
+)
+
+cat("\n============================================================\n")
+
+system("git add R/Curso_temporal_Igg.R data/processed/Curso_temporal_IgG.xlsx results/")
+system("git status")
+system('git commit -m "Update IgG temporal analysis and results"')
+system("git push")

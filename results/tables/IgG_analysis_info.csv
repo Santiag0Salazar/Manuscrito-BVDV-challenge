@@ -1,11 +1,11 @@
-Item,Value
-Analysis,Temporal anti-E2 IgG analysis
-Input file,C:\Users\santi\OneDrive\Escritorio\Analisis vacuna BVDV\Manuscrito-BVDV-challenge/data/processed/Curso_temporal_IgG.xlsx
-Number of observations,207
-Number of animals,23
-Groups,"Control, 25ug, 50ug, 100ug, Commercial"
-Time points,"0, 7, 14, 21, 28, 35, 42, 49, 56"
-Output Excel,C:\Users\santi\OneDrive\Escritorio\Analisis vacuna BVDV\Manuscrito-BVDV-challenge/results/tables/Curso_temporal_IgG_resultados.xlsx
-Figures directory,C:\Users\santi\OneDrive\Escritorio\Analisis vacuna BVDV\Manuscrito-BVDV-challenge/results/figures
-Models directory,C:\Users\santi\OneDrive\Escritorio\Analisis vacuna BVDV\Manuscrito-BVDV-challenge/results/models
-Analysis date,2026-09-23
+"Item","Value"
+"Analysis","Temporal anti-E2 IgG analysis"
+"Input file","Curso_temporal_IgG.xlsx"
+"Number of animals","23"
+"Number of observations","207"
+"Groups","Control, 25ug, 50ug, 100ug, Commercial"
+"Time points","0, 7, 14, 21, 28, 35, 42, 49, 56"
+"Longitudinal model","Linear mixed-effects model"
+"Random effect","Animal"
+"Multiple comparison","Tukey"
+"NLS models","Logistic, Gompertz, Weibull"
