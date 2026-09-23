@@ -2,3 +2,15 @@
 .Rhistory
 .RData
 .Ruserdata
+
+# Raw experimental data
+data/raw/*
+
+# Temporary and local files
+*.tmp
+*.log
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
