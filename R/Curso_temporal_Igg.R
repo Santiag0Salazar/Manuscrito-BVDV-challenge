@@ -3023,3 +3023,22 @@ cat(
 cat(
   "\n============================================================\n"
 )
+
+
+
+# Opción 1: lo que ya calculó el script
+metric_tests$AUC$anova
+
+# Opción 2: directo, con la salida clásica de R
+summary(aov(AUC ~ Grupo, data = animal_metrics))
+
+
+
+# 1. ¿Coinciden las medias con las del manuscrito (79.98, 81.78, 84.94 y 36.83)?
+metric_summary %>% select(Grupo, n, AUC_mean, AUC_sd)
+
+# 2. ¿El 29.08 salió de un análisis sin el grupo control?
+summary(aov(AUC ~ Grupo, data = filter(animal_metrics, Grupo != "Control")))
+
+# 3. ¿Salió de una versión anterior de los datos o de otro script?
+#    (por ejemplo, un AUC sobre títulos log2, como dice el eje de la Fig. 2D)

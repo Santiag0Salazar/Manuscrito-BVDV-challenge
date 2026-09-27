@@ -1,0 +1,140 @@
+R version 4.6.0 (2026-04-24 ucrt)
+Platform: x86_64-w64-mingw32/x64
+Running under: Windows 11 x64 (build 26200)
+
+Matrix products: default
+  LAPACK version 3.12.1
+
+locale:
+[1] LC_COLLATE=Spanish_Latin America.utf8 
+[2] LC_CTYPE=Spanish_Latin America.utf8   
+[3] LC_MONETARY=Spanish_Latin America.utf8
+[4] LC_NUMERIC=C                          
+[5] LC_TIME=Spanish_Latin America.utf8    
+
+time zone: America/Santiago
+tzcode source: internal
+
+attached base packages:
+[1] stats     graphics  grDevices
+[4] utils     datasets  methods  
+[7] base     
+
+other attached packages:
+ [1] logistf_1.26.1  
+ [2] blme_1.0-7      
+ [3] ggpubr_0.6.3    
+ [4] broom_1.0.13    
+ [5] scales_1.4.0    
+ [6] pracma_2.4.6    
+ [7] rstatix_0.7.3   
+ [8] flextable_0.10.1
+ [9] officer_0.7.6   
+[10] nlme_3.1-169    
+[11] tibble_3.3.1    
+[12] purrr_1.2.2     
+[13] cowplot_1.2.0   
+[14] patchwork_1.3.2 
+[15] emmeans_2.0.3   
+[16] lmerTest_3.2-1  
+[17] lme4_2.0-1      
+[18] Matrix_1.7-5    
+[19] openxlsx_4.2.9  
+[20] readxl_1.5.0    
+[21] readr_2.2.0     
+[22] tidyr_1.3.2     
+[23] dplyr_1.2.1     
+[24] ggplot2_4.0.3   
+
+loaded via a namespace (and not attached):
+ [1] Rdpack_2.6.6           
+ [2] sandwich_3.1-1         
+ [3] rlang_1.2.0            
+ [4] magrittr_2.0.5         
+ [5] multcomp_1.4-30        
+ [6] otel_0.2.0             
+ [7] compiler_4.6.0         
+ [8] mgcv_1.9-4             
+ [9] systemfonts_1.3.2      
+[10] vctrs_0.7.3            
+[11] crayon_1.5.3           
+[12] shape_1.4.6.1          
+[13] pkgconfig_2.0.3        
+[14] fastmap_1.2.0          
+[15] backports_1.5.1        
+[16] labeling_0.4.3         
+[17] utf8_1.2.6             
+[18] rmarkdown_2.31         
+[19] tzdb_0.5.0             
+[20] nloptr_2.2.1           
+[21] ragg_1.5.2             
+[22] bit_4.6.0              
+[23] jomo_2.7-6             
+[24] xfun_0.58              
+[25] glmnet_5.0             
+[26] pan_2.0                
+[27] uuid_1.2-2             
+[28] parallel_4.6.0         
+[29] R6_2.6.1               
+[30] stringi_1.8.7          
+[31] RColorBrewer_1.1-3     
+[32] rpart_4.1.27           
+[33] car_3.1-5              
+[34] boot_1.3-32            
+[35] cellranger_1.1.0       
+[36] numDeriv_2016.8-1.1    
+[37] estimability_1.5.1     
+[38] Rcpp_1.1.1-1.1         
+[39] iterators_1.0.14       
+[40] knitr_1.51             
+[41] zoo_1.8-15             
+[42] nnet_7.3-20            
+[43] splines_4.6.0          
+[44] tidyselect_1.2.1       
+[45] rstudioapi_0.19.0      
+[46] abind_1.4-8            
+[47] codetools_0.2-20       
+[48] lattice_0.22-9         
+[49] withr_3.0.3            
+[50] S7_0.2.2               
+[51] askpass_1.2.1          
+[52] coda_0.19-4.1          
+[53] evaluate_1.0.5         
+[54] survival_3.8-6         
+[55] zip_3.0.2              
+[56] xml2_1.6.0             
+[57] pillar_1.11.1          
+[58] carData_3.0-6          
+[59] mice_3.19.0            
+[60] foreach_1.5.2          
+[61] reformulas_0.4.4       
+[62] generics_0.1.4         
+[63] vroom_1.7.1            
+[64] hms_1.1.4              
+[65] minqa_1.2.8            
+[66] glue_1.8.1             
+[67] gdtools_0.5.1          
+[68] tools_4.6.0            
+[69] data.table_1.18.6.1    
+[70] ggsignif_0.6.4         
+[71] mvtnorm_1.4-1          
+[72] grid_4.6.0             
+[73] rbibutils_2.4.1        
+[74] formula.tools_1.7.1    
+[75] Formula_1.2-5          
+[76] cli_3.6.6              
+[77] textshaping_1.0.5      
+[78] fontBitstreamVera_0.1.1
+[79] gtable_0.3.6           
+[80] digest_0.6.39          
+[81] fontquiver_0.2.1       
+[82] operator.tools_1.6.3.1 
+[83] TH.data_1.1-5          
+[84] farver_2.1.2           
+[85] htmltools_0.5.9        
+[86] lifecycle_1.0.5        
+[87] mitml_0.4-5            
+[88] bit64_4.8.2            
+[89] fontLiberation_0.1.0   
+[90] openssl_2.4.2          
+[91] MASS_7.3-65            
