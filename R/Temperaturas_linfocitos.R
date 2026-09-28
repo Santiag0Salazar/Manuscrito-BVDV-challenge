@@ -1,19 +1,53 @@
-###############################################################################
-# SCRIPT DE ANÁLISIS DE LINFOCITOS Y TEMPERATURA RECTAL - ENSAYO BVDV
-# ESTILO NATURE / GRAPHPAD PRISM + MODELOS DE EFECTOS MIXTOS (LMM) 
-# COMPARACIONES TODOS CONTRA TODOS (TUKEY-KRAMER) + BOXPLOT DÍA 8
-###############################################################################
+# ============================================================
+# MANUSCRITO-BVDV-CHALLENGE
+# TEMPERATURA RECTAL Y LINFOCITOS
+#
+# Secciones 3.1 (tolerancia posvacunal) y 3.6 (desafío),
+# Figura 8A–B, Tabla 4 (filas de temperatura), Figuras S1 y S4
+#
+# Hojas del Excel:
+#   "T° rectal desafio" : días 0–27 post-desafío (am y pm en días 0–2)
+#   "T°Rectal v1"       : días 0–6 tras la primera dosis
+#   "T°Rectal v2"       : días 0–2 tras el refuerzo
+#   "LYM"               : linfocitos, promedios por grupo (sin datos individuales)
+#
+# Análisis (Secciones 2.10 y 2.11 del manuscrito):
+#   - Temperatura: modelo lineal mixto (lmerTest::lmer), grupo * tiempo
+#     (categórico), intercepto aleatorio por animal; F tipo III, Satterthwaite
+#   - Sensibilidad: mismo modelo con correlación temporal CAR(1) (nlme)
+#   - Día 8 (pico en control y comercial): ANOVA de una vía + Tukey
+#   - Incidencia por animal (Tabla 4): ≥ 39.2 °C, > 40 °C, > 40 °C el día 8,
+#     fiebre sostenida (≥ 2 lecturas consecutivas > 40 °C); Fisher exacto
+#     recombinantes (agrupados) vs comercial
+#   - Posvacunación: animales con > 40 °C y con fiebre sostenida por dosis
+#   - Linfocitos: descriptivo (solo hay promedios por grupo)
+#
+# Salidas (carpeta results/ del proyecto):
+#   figures/Temperature_Figure_8A_kinetics.(pdf|tiff|png)
+#   figures/Temperature_Figure_8B_day8.(pdf|tiff|png)
+#   figures/Temperature_Figure_S1_post_vaccination.(pdf|tiff|png)
+#   figures/Lymphocytes_Figure_S4.(pdf|tiff|png)
+#   tables/Temperatura_linfocitos_resultados.xlsx
+#   reports/Temperatura_linfocitos_informe.docx
+#   models/Temperatura_modelos.rds
+#   sessionInfo_temperatura.txt
+#
+# Autor: Santiago Salazar
+# ============================================================
+
+
+# ============================================================
+# 1. OPCIONES Y PAQUETES
+# ============================================================
 
 options(stringsAsFactors = FALSE)
 
-# =============================================================================
-# 0. INSTALACIÓN Y CARGA DE PAQUETES
-# =============================================================================
-
 required_packages <- c(
-  "ggplot2", "dplyr", "tidyr", "readxl", "readr",
-  "lme4", "lmerTest", "emmeans", "multcomp", "broom.mixed",
-  "patchwork", "cowplot", "scales", "pracma", "purrr"
+  "ragg",
+  "systemfonts",
+  "ggplot2", "dplyr", "tidyr", "tibble", "readxl", "openxlsx",
+  "lme4", "lmerTest", "nlme", "emmeans", "patchwork", "cowplot",
+  "purrr", "scales", "officer", "flextable"
 )
 
 missing_packages <- required_packages[
@@ -28,533 +62,845 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(dplyr)
   library(tidyr)
+  library(tibble)
   library(readxl)
-  library(readr)
+  library(openxlsx)
   library(lme4)
   library(lmerTest)
   library(emmeans)
-  library(multcomp)
-  library(broom.mixed)
+  library(patchwork)
   library(cowplot)
-  library(scales)
-  library(pracma)
   library(purrr)
+  library(scales)
+  library(officer)
+  library(flextable)
 })
 
-set.seed(20260620)
+emm_options(lmer.df = "satterthwaite")
 
-# =============================================================================
-# 1. CONFIGURACIÓN DE DIRECTORIOS
-# =============================================================================
 
-input_file <- "C:/Users/santi/OneDrive/Escritorio/BVDV Imagenes/Manuscrito/Signos clinicos/Registros Lym y Temperaturas ensayo DVB.xlsx"
-out_dir    <- file.path("C:/Users/santi/OneDrive/Escritorio/BVDV Imagenes/Manuscrito/Signos clinicos", "Temperatura_LYM")
+# ============================================================
+# 2. SEMILLA (solo afecta la posición horizontal de los puntos)
+# ============================================================
 
-tables_dir  <- file.path(out_dir, "tablas")
-figures_dir <- file.path(out_dir, "figuras")
-stats_dir   <- file.path(out_dir, "estadistica_LMM")
+set.seed(20260811)
 
-dir.create(tables_dir, showWarnings = FALSE, recursive = TRUE)
-dir.create(figures_dir, showWarnings = FALSE, recursive = TRUE)
-dir.create(stats_dir, showWarnings = FALSE, recursive = TRUE)
 
-# =============================================================================
-# 2. PALETA Y CONFIGURACIÓN VISUAL (ESTANDARIZADA)
-# =============================================================================
+# ============================================================
+# 3. LOCALIZAR PROYECTO
+# ============================================================
+
+find_project_root <- function() {
+  
+  current_dir <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+  
+  while (current_dir != dirname(current_dir)) {
+    
+    if (length(list.files(current_dir, pattern = "\\.Rproj$")) > 0) {
+      return(current_dir)
+    }
+    
+    current_dir <- dirname(current_dir)
+  }
+  
+  stop("No se encontró el archivo .Rproj del proyecto.")
+}
+
+project_dir <- find_project_root()
+
+
+# ============================================================
+# 4. DIRECTORIOS
+# ============================================================
+
+data_dir    <- file.path(project_dir, "data", "processed")
+results_dir <- file.path(project_dir, "results")
+tables_dir  <- file.path(results_dir, "tables")
+figures_dir <- file.path(results_dir, "figures")
+models_dir  <- file.path(results_dir, "models")
+reports_dir <- file.path(results_dir, "reports")
+
+for (d in c(tables_dir, figures_dir, models_dir, reports_dir)) {
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+}
+
+
+# ============================================================
+# 5. PARÁMETROS DEL ANÁLISIS
+# ============================================================
+
+input_file <- file.path(data_dir, "Registros_Lym_y_Temperaturas_ensayo_DVB.xlsx")
+
+sheet_challenge <- "T° rectal desafio"
+sheet_v1        <- "T°Rectal v1"
+sheet_v2        <- "T°Rectal v2"
+sheet_lym       <- "LYM"
+
+fever_threshold      <- 39.2   # Sección 2.10
+high_fever_threshold <- 40.0   # categoría 3 de la Tabla 2 (> 40.0 °C)
+day_peak             <- 8      # pico en los grupos control y comercial
+
+# Animales retirados tras la segunda prueba serológica (Sección 2.1)
+withdrawn_animals <- c("5452", "5434", "4906", "5442")
+
+# En la hoja de la primera dosis, la fila rotulada 5451 contiene los datos
+# del animal de reemplazo 7766 (5451 fue retirado)
+relabel_v1 <- c("5451" = "7766")
+
+group_levels <- c("Control", "25ug", "50ug", "100ug", "Commercial")
+recombinant  <- c("25ug", "50ug", "100ug")
+
+
+# ============================================================
+# 6. LECTURA Y LIMPIEZA
+# ============================================================
+
+if (!file.exists(input_file)) {
+  stop(paste0("No se encontró el archivo:\n", input_file))
+}
+
+recode_group <- function(x) {
+  
+  x  <- trimws(as.character(x))
+  xl <- tolower(x)
+  
+  xn <- ifelse(
+    grepl("[0-9]+\\s*(ug|µg|mcg)", xl, perl = TRUE),
+    sub("^.*?([0-9]+)\\s*(ug|µg|mcg).*$", "\\1", xl, perl = TRUE),
+    gsub("[^0-9]", "", xl)
+  )
+  
+  dplyr::case_when(
+    toupper(x) == "G1"                         ~ "Control",
+    toupper(x) == "G2"                         ~ "25ug",
+    toupper(x) == "G3"                         ~ "50ug",
+    toupper(x) == "G4"                         ~ "100ug",
+    toupper(x) == "G5"                         ~ "Commercial",
+    grepl("control|placebo", xl)               ~ "Control",
+    grepl("comer|commer|comm|cattle", xl)      ~ "Commercial",
+    xn == "25"                                 ~ "25ug",
+    xn == "50"                                 ~ "50ug",
+    xn == "100"                                ~ "100ug",
+    TRUE                                       ~ NA_character_
+  )
+}
+
+# Las columnas "Dia k am/pm" se convierten a días del manuscrito:
+# Dia 1 = día 0; lectura de la tarde = + 0.5
+read_temperature_sheet <- function(sheet, relabel = NULL) {
+  
+  df <- readxl::read_excel(input_file, sheet = sheet, skip = 1)
+  names(df) <- trimws(names(df))
+  
+  time_cols <- grep("^Dia", names(df), value = TRUE)
+  
+  df %>%
+    mutate(DIIO = as.character(DIIO)) %>%
+    filter(!is.na(DIIO), grepl("^[0-9]+$", DIIO)) %>%
+    mutate(DIIO = if (!is.null(relabel)) dplyr::recode(DIIO, !!!relabel) else DIIO) %>%
+    filter(!DIIO %in% withdrawn_animals) %>%
+    mutate(Grupo = factor(recode_group(Grupo), levels = group_levels)) %>%
+    select(Animal = DIIO, Grupo, all_of(time_cols)) %>%
+    pivot_longer(all_of(time_cols), names_to = "Reading", values_to = "Temp") %>%
+    mutate(
+      Temp    = suppressWarnings(as.numeric(Temp)),
+      Day     = as.numeric(sub("^Dia\\s*([0-9]+).*$", "\\1", Reading)) - 1,
+      Session = ifelse(grepl("pm", Reading, ignore.case = TRUE), "pm", "am"),
+      Time    = Day + ifelse(Session == "pm", 0.5, 0),
+      Animal  = factor(Animal)
+    ) %>%
+    filter(!is.na(Temp)) %>%
+    arrange(Grupo, Animal, Time)
+}
+
+temp_challenge <- read_temperature_sheet(sheet_challenge)
+temp_v1        <- read_temperature_sheet(sheet_v1, relabel = relabel_v1)
+temp_v2        <- read_temperature_sheet(sheet_v2)
+
+for (nm in c("temp_challenge", "temp_v1", "temp_v2")) {
+  if (any(is.na(get(nm)$Grupo))) stop("Grupos no reconocidos en ", nm)
+}
+
+# Linfocitos: una fila por grupo, una columna por muestreo (promedios)
+lym_raw  <- readxl::read_excel(input_file, sheet = sheet_lym, col_names = FALSE)
+lym_head <- as.character(unlist(lym_raw[1, -1]))   # "0 days", ..., "28+"
+
+lym_long <- lym_raw[-(1:2), ] %>%
+  setNames(c("Grupo", lym_head)) %>%
+  filter(!is.na(Grupo)) %>%
+  mutate(Grupo = factor(recode_group(Grupo), levels = group_levels)) %>%
+  pivot_longer(-Grupo, names_to = "Sampling", values_to = "LYM") %>%
+  mutate(
+    LYM      = as.numeric(LYM),
+    Phase    = ifelse(grepl("\\+|desaf", tolower(Sampling)), "Challenge", "Vaccination"),
+    Day      = as.numeric(gsub("[^0-9]", "", Sampling)),
+    Sampling = factor(Sampling, levels = lym_head)
+  )
+
+
+# ============================================================
+# 7. COMPROBACIÓN BÁSICA
+# ============================================================
+
+cat("\n================ DATOS =================\n")
+cat("\nAnimales por grupo (desafío):\n")
+print(temp_challenge %>% distinct(Animal, Grupo) %>% count(Grupo))
+cat("\nAnimales por grupo (primera dosis):\n")
+print(temp_v1 %>% distinct(Animal, Grupo) %>% count(Grupo))
+cat("\nAnimales por grupo (refuerzo):\n")
+print(temp_v2 %>% distinct(Animal, Grupo) %>% count(Grupo))
+
+
+# ============================================================
+# 8. PALETA, FORMAS Y TEMA (iguales al resto de los scripts)
+# ============================================================
 
 palette_nature <- c(
-  "Control" = "#4D4D4D",
-  "25 µg"   = "#004B87",
-  "50 µg"   = "#E69F00",
-  "100 µg"  = "#2ECC71",
-  "Comm."   = "#D55E00"
+  "Control"    = "#4D4D4D",
+  "25ug"       = "#004B87",
+  "50ug"       = "#E69F00",
+  "100ug"      = "#2ECC71",
+  "Commercial" = "#D55E00"
 )
 
-shapes_nature <- c(
-  "Control" = 16,
-  "25 µg"   = 15,
-  "50 µg"   = 17,
-  "100 µg"  = 25,
-  "Comm."   = 18
+shape_groups <- c(
+  "Control"    = 21,
+  "25ug"       = 22,
+  "50ug"       = 24,
+  "100ug"      = 25,
+  "Commercial" = 23
 )
 
-group_levels <- c("Control", "25 µg", "50 µg", "100 µg", "Comm.")
+group_labels <- c(
+  "Control"    = "Control",
+  "25ug"       = "25 µg",
+  "50ug"       = "50 µg",
+  "100ug"      = "100 µg",
+  "Commercial" = "Comm."
+)
 
-# =============================================================================
-# 3. TEMA NATURE Y FUNCIONES AUXILIARES
-# =============================================================================
+# Tipo de letra de todas las figuras (texto de ejes, leyendas y etiquetas)
+base_family <- "Arial"
 
-theme_nature <- function(base_size = 11) {
-  cowplot::theme_cowplot(font_size = base_size, font_family = "arial") +
+if (!base_family %in% systemfonts::system_fonts()$family) {
+  warning("No se encontró la fuente ", base_family, "; se usará 'sans'.")
+  base_family <- "sans"
+}
+
+# geom_text/annotate no heredan la fuente del tema
+update_geom_defaults("text",  list(family = base_family))
+update_geom_defaults("label", list(family = base_family))
+
+theme_nature <- function(base_size = 10) {
+  
+  cowplot::theme_cowplot(font_size = base_size, font_family = base_family) +
     theme(
-      plot.title           = element_text(face = "plain", size = base_size + 1, hjust = 0.5),
-      plot.subtitle        = element_text(size = base_size, color = "grey25"),
-      strip.background     = element_blank(),
-      strip.text           = element_text(face = "plain", size = base_size),
+      plot.title           = element_text(face = "plain", size = base_size, hjust = 0.5),
       axis.title           = element_text(size = base_size),
-      axis.text            = element_text(size = base_size - 1, color = "grey15"),
+      axis.text            = element_text(size = base_size, color = "grey15"),
+      strip.background     = element_rect(fill = "grey95", color = NA),
+      strip.text           = element_text(face = "bold", size = base_size),
       legend.title         = element_blank(),
       legend.position      = "top",
       legend.justification = "center",
-      legend.text          = element_text(size = base_size - 1),
       panel.grid.major.y   = element_line(color = "grey90", linewidth = 0.25),
       panel.grid.major.x   = element_blank(),
       panel.grid.minor     = element_blank()
     )
 }
 
-save_nature <- function(plot, filename, width, height) {
-  ggsave(
-    file.path(figures_dir, paste0(filename, ".tiff")),
-    plot, width = width, height = height, units = "in", dpi = 600, compression = "lzw"
+
+# ============================================================
+# 9. FUNCIÓN PARA GUARDAR FIGURAS
+# ============================================================
+
+save_nature <- function(plot, filename, width = 7, height = 4) {
+  
+  # PDF con cairo_pdf y TIFF/PNG con ragg: usan la fuente Arial instalada en el sistema
+  # y admiten caracteres Unicode (µ, °, ×)
+  ggsave(file.path(figures_dir, paste0(filename, ".pdf")),
+         plot = plot, width = width, height = height, units = "in",
+         device = grDevices::cairo_pdf)
+  
+  ggsave(file.path(figures_dir, paste0(filename, ".tiff")),
+         plot = plot, width = width, height = height, units = "in",
+         dpi = 600, compression = "lzw", bg = "white",
+         device = ragg::agg_tiff)
+  
+  ggsave(file.path(figures_dir, paste0(filename, ".png")),
+         plot = plot, width = width, height = height, units = "in",
+         dpi = 600, bg = "white",
+         device = ragg::agg_png)
+}
+
+
+# ============================================================
+# 10. FORMATO DE VALORES P
+# ============================================================
+
+fmt_p_table <- function(p) ifelse(p < 0.0001, "< 0.0001", sprintf("%.4f", p))
+fmt_p_text  <- function(p) ifelse(p < 0.001, "p < 0.001", paste0("p = ", sprintf("%.3f", p)))
+
+
+# ============================================================
+# 11. RESUMEN POR GRUPO Y LECTURA
+# ============================================================
+
+summarise_temp <- function(df) {
+  df %>%
+    group_by(Grupo, Time, Day, Session) %>%
+    summarise(
+      n    = n(),
+      mean = mean(Temp),
+      sd   = sd(Temp),
+      sem  = sd / sqrt(n),
+      max  = max(Temp),
+      .groups = "drop"
+    )
+}
+
+summary_challenge <- summarise_temp(temp_challenge)
+summary_v1        <- summarise_temp(temp_v1)
+summary_v2        <- summarise_temp(temp_v2)
+
+
+# ============================================================
+# 12. MODELO LINEAL MIXTO: TEMPERATURA DURANTE EL DESAFÍO
+# ============================================================
+
+fit_lmm <- function(df) {
+  df <- df %>% mutate(TimeF = factor(Time))
+  lmerTest::lmer(Temp ~ Grupo * TimeF + (1 | Animal), data = df, REML = TRUE)
+}
+
+anova_lmm <- function(m, label) {
+  a <- as.data.frame(anova(m, type = 3, ddf = "Satterthwaite"))
+  tibble(
+    Dataset = label,
+    Effect  = recode(rownames(a), "Grupo" = "Group", "TimeF" = "Time",
+                     "Grupo:TimeF" = "Group × time"),
+    NumDF   = a$NumDF,
+    DenDF   = round(a$DenDF, 1),
+    F_value = round(a$`F value`, 2),
+    p_value = a$`Pr(>F)`,
+    p_text  = fmt_p_table(a$`Pr(>F)`)
   )
 }
 
-standardize_group <- function(x) {
-  case_when(
-    trimws(as.character(x)) %in% c("G1", "Control", "Control (-)", "Placebo") ~ "Control",
-    trimws(as.character(x)) %in% c("G2", "25ug", "25 µg", "25 µg rE2", "rE2 25ug") ~ "25 µg",
-    trimws(as.character(x)) %in% c("G3", "50ug", "50 µg", "50 µg rE2", "rE2 50ug") ~ "50 µg",
-    trimws(as.character(x)) %in% c("G4", "100ug", "100 µg", "100 µg rE2", "rE2 100ug") ~ "100 µg",
-    trimws(as.character(x)) %in% c("G5", "Comercial", "Commercial", "Comm.", "Cattle master C+") ~ "Comm.",
-    TRUE ~ as.character(x)
-  )
+lmm_challenge <- fit_lmm(temp_challenge)
+lmm_v1        <- fit_lmm(temp_v1)
+lmm_v2        <- fit_lmm(temp_v2)
+
+anova_table <- bind_rows(
+  anova_lmm(lmm_challenge, "Challenge"),
+  anova_lmm(lmm_v1,        "First dose"),
+  anova_lmm(lmm_v2,        "Booster")
+)
+
+# Sensibilidad: correlación temporal CAR(1) entre lecturas del mismo animal
+lmm_car1 <- tryCatch(
+  nlme::lme(
+    Temp ~ Grupo * TimeF,
+    random      = ~ 1 | Animal,
+    correlation = nlme::corCAR1(form = ~ Time | Animal),
+    data        = temp_challenge %>% mutate(TimeF = factor(Time)),
+    method      = "REML",
+    control     = nlme::lmeControl(opt = "optim")
+  ),
+  error = function(e) { message("CAR(1) no convergió: ", e$message); NULL }
+)
+
+anova_car1 <- if (!is.null(lmm_car1)) {
+  a <- as.data.frame(anova(lmm_car1, type = "marginal"))
+  tibble(
+    Effect  = rownames(a), numDF = a$numDF, denDF = a$denDF,
+    F_value = round(a$`F-value`, 2), p_value = a$`p-value`,
+    p_text  = fmt_p_table(a$`p-value`),
+    Phi     = round(as.numeric(coef(lmm_car1$modelStruct$corStruct,
+                                    unconstrained = FALSE)), 3)
+  ) %>% filter(Effect != "(Intercept)")
+} else tibble()
+
+
+# ============================================================
+# 13. DÍA 8: ANOVA DE UNA VÍA + TUKEY
+# ============================================================
+
+temp_day8 <- temp_challenge %>% filter(Time == day_peak)
+
+fit_day8 <- lm(Temp ~ Grupo, data = temp_day8)
+
+day8_anova <- as.data.frame(anova(fit_day8)) %>%
+  rownames_to_column("Effect") %>%
+  as_tibble()
+
+day8_tukey <- as.data.frame(pairs(emmeans(fit_day8, ~ Grupo), adjust = "tukey")) %>%
+  as_tibble() %>%
+  mutate(p_text = fmt_p_table(p.value))
+
+day8_descriptives <- temp_day8 %>%
+  group_by(Grupo) %>%
+  summarise(n = n(), mean = mean(Temp), sd = sd(Temp),
+            min = min(Temp), max = max(Temp), .groups = "drop")
+
+
+# ============================================================
+# 14. INCIDENCIA POR ANIMAL (TABLA 4) Y FIEBRE SOSTENIDA
+# ============================================================
+
+# Fiebre sostenida: dos o más lecturas consecutivas sobre el umbral
+max_run <- function(x) {
+  r <- rle(x)
+  if (any(r$values)) max(r$lengths[r$values]) else 0L
 }
 
-# =============================================================================
-# 4. FUNCIÓN PARA LIMPIEZA DE HOJAS
-# =============================================================================
+animal_outcomes <- function(df) {
+  df %>%
+    arrange(Animal, Time) %>%
+    group_by(Grupo, Animal) %>%
+    summarise(
+      max_temp            = max(Temp),
+      any_ge_fever_am     = any(Temp[Session == "am"] >= fever_threshold),
+      any_ge_fever_all    = any(Temp >= fever_threshold),
+      n_am_ge_fever       = sum(Temp[Session == "am"] >= fever_threshold),
+      any_gt_40           = any(Temp > high_fever_threshold),
+      gt_40_day_peak      = any(Temp[Time == day_peak] > high_fever_threshold),
+      ge_fever_day_peak   = any(Temp[Time == day_peak] >= fever_threshold),
+      sustained_gt_40     = max_run(Temp > high_fever_threshold) >= 2,
+      .groups = "drop"
+    )
+}
 
-clean_temperature_sheet <- function(sheet_name) {
-  df <- read_excel(input_file, sheet = sheet_name, skip = 1)
-  names(df) <- trimws(names(df))
-  
-  group_col <- names(df)[tolower(trimws(names(df))) == "grupo"]
-  temperature_cols <- grep("^Dia", names(df), value = TRUE)
-  
-  if (length(group_col) == 0) {
-    stop(paste("No se encontró la columna 'Grupo' en la hoja:", sheet_name))
-  }
-  
-  df_long <- df %>%
-    dplyr::mutate(
-      DIIO = as.character(DIIO),
-      Grupo_std = standardize_group(.data[[group_col]])
+outcomes_challenge <- animal_outcomes(temp_challenge)
+outcomes_v1        <- animal_outcomes(temp_v1)
+outcomes_v2        <- animal_outcomes(temp_v2)
+
+count_by_group <- function(outcomes, label) {
+  outcomes %>%
+    group_by(Grupo) %>%
+    summarise(
+      n = n(),
+      across(c(any_ge_fever_am, any_ge_fever_all, any_gt_40,
+               gt_40_day_peak, ge_fever_day_peak, sustained_gt_40), sum),
+      .groups = "drop"
     ) %>%
-    dplyr::filter(!is.na(DIIO), !is.na(Grupo_std), Grupo_std %in% group_levels) %>%
-    dplyr::select(DIIO, Grupo = Grupo_std, dplyr::all_of(temperature_cols)) %>%
-    tidyr::pivot_longer(
-      cols = dplyr::all_of(temperature_cols), 
-      names_to = "Tiempo_original", 
-      values_to = "Temperatura"
-    ) %>%
-    dplyr::mutate(
-      Temperatura = suppressWarnings(as.numeric(Temperatura)),
-      Dia_original = as.numeric(sub("Dia ([0-9]+).*", "\\1", Tiempo_original)),
-      Hora = ifelse(grepl("pm", Tiempo_original, ignore.case = TRUE), 0.5, 0),
-      Tiempo = Dia_original - 1 + Hora,
-      Grupo = factor(Grupo, levels = group_levels),
-      Animal = factor(DIIO)
-    ) %>%
-    dplyr::filter(!is.na(Temperatura), !is.na(Tiempo)) %>%
-    dplyr::arrange(Grupo, Animal, Tiempo)
-  
-  return(df_long)
+    mutate(Dataset = label, .before = 1)
 }
 
-# =============================================================================
-# 5. FUNCIÓN DE MODELO LINEAL DE EFECTOS MIXTOS (LMM)
-# =============================================================================
+incidence_table <- bind_rows(
+  count_by_group(outcomes_challenge, "Challenge"),
+  count_by_group(outcomes_v1,        "First dose"),
+  count_by_group(outcomes_v2,        "Booster")
+)
 
-run_lmm_analysis <- function(data, response_var, time_var, output_prefix) {
-  cat("\n=====================================================================\n")
-  cat(paste(" EJECUTANDO MODELO DE EFECTOS MIXTOS (LMM) PARA:", output_prefix, "\n"))
-  cat("=====================================================================\n")
+# Fisher: recombinantes (agrupados) vs comercial
+fisher_rec_vs_comm <- function(outcomes, variable, label) {
   
-  data_mod <- data %>%
-    dplyr::mutate(Tiempo_factor = factor(.data[[time_var]]))
+  sub <- outcomes %>%
+    filter(Grupo %in% c(recombinant, "Commercial")) %>%
+    mutate(Set = ifelse(Grupo == "Commercial", "Commercial", "Recombinant"))
   
-  formula_str <- paste(response_var, "~ Grupo * Tiempo_factor + (1 | Animal)")
-  model <- lmer(as.formula(formula_str), data = data_mod)
+  tab <- table(factor(sub$Set, levels = c("Recombinant", "Commercial")),
+               factor(sub[[variable]], levels = c(FALSE, TRUE)))
   
-  anova_res <- anova(model, type = 3)
-  write.csv(anova_res, file.path(stats_dir, paste0(output_prefix, "_LMM_ANOVA.csv")))
-  
-  emm <- emmeans(model, ~ Grupo | Tiempo_factor)
-  
-  pairwise_ctrl <- contrast(emm, method = "trt.vs.ctrl", ref = "Control", adjust = "dunnet")
-  write.csv(as.data.frame(pairwise_ctrl), file.path(stats_dir, paste0(output_prefix, "_LMM_Comparaciones_vs_Control.csv")))
-  
-  pairwise_all <- contrast(emm, method = "pairwise", adjust = "tukey")
-  write.csv(as.data.frame(pairwise_all), file.path(stats_dir, paste0(output_prefix, "_LMM_Comparaciones_Tukey_Todos_vs_Todos.csv")))
-  
-  return(list(model = model, anova = anova_res, emmeans = emm, contrasts = pairwise_all))
+  tibble(
+    Dataset     = label,
+    Outcome     = variable,
+    Recombinant = paste0(tab["Recombinant", "TRUE"], "/", sum(tab["Recombinant", ])),
+    Commercial  = paste0(tab["Commercial", "TRUE"], "/", sum(tab["Commercial", ])),
+    p_value     = fisher.test(tab)$p.value,
+    p_text      = fmt_p_table(fisher.test(tab)$p.value)
+  )
 }
 
-# =============================================================================
-# 6. ANÁLISIS DE TEMPERATURAS (DESAFÍO, V1, V2)
-# =============================================================================
+fisher_table <- bind_rows(
+  fisher_rec_vs_comm(outcomes_challenge, "ge_fever_day_peak", "Challenge"),
+  fisher_rec_vs_comm(outcomes_challenge, "any_gt_40",         "Challenge"),
+  fisher_rec_vs_comm(outcomes_challenge, "any_ge_fever_am",   "Challenge"),
+  fisher_rec_vs_comm(outcomes_challenge, "sustained_gt_40",   "Challenge"),
+  fisher_rec_vs_comm(outcomes_v1,        "any_gt_40",         "First dose"),
+  fisher_rec_vs_comm(outcomes_v2,        "any_gt_40",         "Booster"),
+  fisher_rec_vs_comm(outcomes_v2,        "sustained_gt_40",   "Booster")
+)
 
-# --- Desafío ---
-datos_temperature <- clean_temperature_sheet("T° rectal desafio")
-temperature_summary <- datos_temperature %>%
-  dplyr::group_by(Grupo, Tiempo) %>%
-  dplyr::summarise(
-    n = sum(!is.na(Temperatura)),
-    mean_temp = mean(Temperatura, na.rm = TRUE),
-    se_temp = sd(Temperatura, na.rm = TRUE) / sqrt(n),
-    .groups = "drop"
-  )
 
-write_csv(datos_temperature, file.path(tables_dir, "01_temperatura_desafio_datos_largos.csv"))
-write_csv(temperature_summary, file.path(tables_dir, "02_resumen_temperatura_desafio.csv"))
+# ============================================================
+# 15. LINFOCITOS: CAMBIO RESPECTO DEL DÍA DEL DESAFÍO
+# ============================================================
 
-lmm_temp_desafio <- run_lmm_analysis(datos_temperature, "Temperatura", "Tiempo", "01_Temp_Desafio")
-
-fig1_temperature <- ggplot() +
-  geom_line(data = datos_temperature, aes(x = Tiempo, y = Temperatura, group = Animal, color = Grupo), linewidth = 0.35, alpha = 0.20) +
-  geom_point(data = datos_temperature, aes(x = Tiempo, y = Temperatura, color = Grupo), size = 1.0, alpha = 0.25) +
-  geom_line(data = temperature_summary, aes(x = Tiempo, y = mean_temp, color = Grupo, group = Grupo), linewidth = 0.9) +
-  geom_errorbar(data = temperature_summary, aes(x = Tiempo, ymin = mean_temp - se_temp, ymax = mean_temp + se_temp, color = Grupo), width = 0.12, linewidth = 0.35) +
-  geom_point(data = temperature_summary, aes(x = Tiempo, y = mean_temp, color = Grupo, shape = Grupo, fill = Grupo), size = 2.2) +
-  geom_hline(yintercept = 39.2, linetype = "dashed", linewidth = 0.55, color = "grey30") +
-  scale_color_manual(values = palette_nature) +
-  scale_fill_manual(values = palette_nature) +
-  scale_shape_manual(values = shapes_nature) +
-  scale_x_continuous(
-    breaks = seq(0, 28, by = 2), # Puedes usar by = 1 o by = 2 según prefieras la densidad de etiquetas
-    limits = c(0, 28),
-    expand = c(0, 0.2)
-  )+  scale_y_continuous(breaks = seq(floor(min(datos_temperature$Temperatura, na.rm = TRUE)), ceiling(max(datos_temperature$Temperatura, na.rm = TRUE)), by = 0.5)) +
-  labs(x = "Days after challenge", y = "Rectal temperature (°C)", color = "Vaccine Group", fill = "Vaccine Group", shape = "Vaccine Group") +
-  theme_nature(11)
-
-save_nature(fig1_temperature, "Figure_1_Rectal_Temperature_Challenge", 5, 3.3)
-
-# --- Vacuna 1 ---
-datos_temperature_v1 <- clean_temperature_sheet("T°Rectal v1")
-temp_v1_summary <- datos_temperature_v1 %>%
-  dplyr::group_by(Grupo, Tiempo) %>%
-  dplyr::summarise(
-    n = sum(!is.na(Temperatura)),
-    mean_temp = mean(Temperatura, na.rm = TRUE),
-    se_temp = sd(Temperatura, na.rm = TRUE) / sqrt(n),
-    .groups = "drop"
-  )
-
-write_csv(datos_temperature_v1, file.path(tables_dir, "04_temperatura_post_vacuna_1_datos.csv"))
-write_csv(temp_v1_summary, file.path(tables_dir, "05_resumen_temperatura_post_vacuna_1.csv"))
-
-lmm_temp_v1 <- run_lmm_analysis(datos_temperature_v1, "Temperatura", "Tiempo", "02_Temp_Vacuna1")
-
-# --- Vacuna 2 ---
-datos_temperature_v2 <- clean_temperature_sheet("T°Rectal v2")
-temp_v2_summary <- datos_temperature_v2 %>%
-  dplyr::group_by(Grupo, Tiempo) %>%
-  dplyr::summarise(
-    n = sum(!is.na(Temperatura)),
-    mean_temp = mean(Temperatura, na.rm = TRUE),
-    se_temp = sd(Temperatura, na.rm = TRUE) / sqrt(n),
-    .groups = "drop"
-  )
-
-write_csv(datos_temperature_v2, file.path(tables_dir, "06_temperatura_post_vacuna_2_datos.csv"))
-write_csv(temp_v2_summary, file.path(tables_dir, "07_resumen_temperatura_post_vacuna_2.csv"))
-
-lmm_temp_v2 <- run_lmm_analysis(datos_temperature_v2, "Temperatura", "Tiempo", "03_Temp_Vacuna2")
-
-# =============================================================================
-# 7. PROCESAMIENTO Y FIGURA DE LINFOCITOS (LYM)
-# =============================================================================
-
-datos_lym_raw <- read_excel(input_file, sheet = "LYM", skip = 1)
-names(datos_lym_raw) <- trimws(names(datos_lym_raw))
-names(datos_lym_raw)[1] <- "Grupo"
-
-lym_cols <- grep("^S[0-9]+$", names(datos_lym_raw), value = TRUE)
-
-lym_long <- datos_lym_raw %>%
-  dplyr::mutate(Grupo = factor(standardize_group(Grupo), levels = group_levels)) %>%
-  dplyr::filter(!is.na(Grupo)) %>%
-  tidyr::pivot_longer(cols = dplyr::all_of(lym_cols), names_to = "Sampling", values_to = "LYM") %>%
-  dplyr::mutate(
-    LYM = suppressWarnings(as.numeric(LYM)),
-    Sampling = factor(Sampling, levels = paste0("S", 1:12))
+lym_challenge <- lym_long %>%
+  filter(Phase == "Challenge") %>%
+  group_by(Grupo) %>%
+  mutate(
+    baseline   = LYM[Day == 0][1],
+    pct_change = 100 * (LYM - baseline) / baseline
   ) %>%
-  dplyr::filter(!is.na(LYM))
+  ungroup()
 
-write_csv(lym_long, file.path(tables_dir, "08_LYM_datos_largos.csv"))
 
-fig4_lym <- ggplot(lym_long, aes(x = Sampling, y = LYM, color = Grupo, group = Grupo)) +
-  geom_vline(xintercept = 7, linetype = "dashed", linewidth = 0.55, color = "grey30") +
-  geom_line(linewidth = 0.9) +
-  geom_point(aes(shape = Grupo, fill = Grupo), size = 2.8) +
-  scale_color_manual(values = palette_nature) +
-  scale_fill_manual(values = palette_nature) +
-  scale_shape_manual(values = shapes_nature) +
-  scale_x_discrete(
-    labels = c(
-      "S1\nDay 0", "S2\nDay 7", "S3\nDay 14", "S4\nDay 22", 
-      "S5", "S6", "S7\nChallenge\nDay 56", "S8\n+3 d", 
-      "S9\n+7 d", "S10\n+14 d", "S11\n+21 d", "S12\n+28 d"
-    )
-  ) +
-  labs(
-    x = "Sampling timepoints",
-    y = expression("Lymphocytes (" * 10^9 * "/L)"),
-    color = "Vaccine Group", fill = "Vaccine Group", shape = "Vaccine Group"
-  ) +
-  theme_nature(12)
+# ============================================================
+# 16. FRASES LISTAS PARA EL MANUSCRITO
+# ============================================================
 
-save_nature(fig4_lym, "Figure_4_Lymphocyte_Kinetics", 7.5, 3.8)
-
-# =============================================================================
-# 8. GENERACIÓN DEL BOXPLOT EN DÍA 8 POST-DESAFÍO (TODOS CONTRA TODOS - TUKEY)
-# =============================================================================
-
-datos_temp_day8 <- datos_temperature %>%
-  filter(Tiempo == 8)
-
-lm_day8    <- lm(Temperatura ~ Grupo, data = datos_temp_day8)
-emms_day8  <- emmeans(lm_day8, ~ Grupo)
-
-pairs_day8 <- as.data.frame(pairs(emms_day8, adjust = "tukey"))
-
-write_csv(pairs_day8, file.path(stats_dir, "09_Temperatura_Dia8_Comparaciones_Todos_vs_Todos_Tukey.csv"))
-
-generate_day8_temperature_boxplot <- function(data_plot, stats_df) {
-  
-  max_y <- max(data_plot$Temperatura, na.rm = TRUE)
-  min_y <- min(data_plot$Temperatura, na.rm = TRUE)
-  range_y <- max_y - min_y
-  if (range_y == 0) range_y <- 1
-  
-  comp_metadata <- list(
-    list(x1 = 1, x2 = 2, row = 1, pattern = "Control - 25 µg|25 µg - Control"),
-    list(x1 = 1, x2 = 3, row = 2, pattern = "Control - 50 µg|50 µg - Control"),
-    list(x1 = 1, x2 = 4, row = 3, pattern = "Control - 100 µg|100 µg - Control"),
-    list(x1 = 1, x2 = 5, row = 4, pattern = "Control - Comm.|Comm. - Control"),
-    list(x1 = 2, x2 = 5, row = 5, pattern = "25 µg - Comm.|Comm. - 25 µg"),
-    list(x1 = 3, x2 = 5, row = 6, pattern = "50 µg - Comm.|Comm. - 50 µg"),
-    list(x1 = 4, x2 = 5, row = 7, pattern = "100 µg - Comm.|Comm. - 100 µg")
-  )
-  
-  lines_and_labels <- map_df(comp_metadata, function(m) {
-    p_val <- stats_df %>%
-      filter(grepl(m$pattern, contrast)) %>%
-      pull(p.value)
-    
-    if (length(p_val) == 0) p_val <- 1.0
-    
-    p_formatted <- if (p_val < 0.001) "p < 0.001" else if (p_val >= 0.05) "ns" else paste0("p = ", sprintf("%.3f", p_val))
-    y_bar <- max_y + (range_y * 0.075 * m$row)
-    
-    data.frame(
-      x = m$x1, xend = m$x2, y = y_bar,
-      x_text = (m$x1 + m$x2) / 2, y_text = y_bar + (range_y * 0.02),
-      p_label = p_formatted
-    )
-  })
-  
-  ylim_max <- max(lines_and_labels$y_text) + (range_y * 0.05)
-  
-  p <- ggplot(data_plot, aes(x = Grupo, y = Temperatura, color = Grupo, fill = Grupo)) +
-    geom_boxplot(
-      width = 0.5, 
-      outlier.shape = NA, 
-      alpha = 0.15, 
-      linewidth = 0.4
-    ) +
-    geom_point(
-      position = position_jitterdodge(
-        jitter.width = 0.35, 
-        jitter.height = 0, 
-        dodge.width = 0.5,
-        seed = 20260620
-      ),
-      size = 1.6, 
-      alpha = 0.85,
-      stroke = 0.3
-    ) +
-    scale_y_continuous(
-      breaks = seq(
-        floor(min(datos_temperature$Temperatura, na.rm = TRUE)), 
-        ceiling(max(datos_temperature$Temperatura, na.rm = TRUE)), 
-        by = 0.5
-      )
-    )+
-    geom_segment(data = lines_and_labels, aes(x = x, xend = xend, y = y, yend = y), 
-                 color = "grey35", linewidth = 0.35, inherit.aes = FALSE) +
-    geom_segment(data = lines_and_labels, aes(x = x, xend = x, y = y, yend = y - (range_y * 0.012)), 
-                 color = "grey35", linewidth = 0.35, inherit.aes = FALSE) +
-    geom_segment(data = lines_and_labels, aes(x = xend, xend = xend, y = y, yend = y - (range_y * 0.012)), 
-                 color = "grey35", linewidth = 0.35, inherit.aes = FALSE) +
-    geom_text(data = lines_and_labels, aes(x = x_text, y = y_text, label = p_label), 
-              color = "black", size = 2.0, vjust = 0, fontface = "plain", inherit.aes = FALSE) +
-    scale_color_manual(values = palette_nature, drop = FALSE) +
-    scale_fill_manual(values = palette_nature, drop = FALSE) +
-    coord_cartesian(ylim = c(min_y - (range_y * 0.05), ylim_max)) +
-    labs(
-      title = "Rectal Temperature at Day 8 Post-Challenge",
-      x = NULL, 
-      y = "Rectal Temperature (°C)"
-    ) +
-    theme_nature(11) +
-    theme(
-      plot.margin = margin(t = 5, r = 8, b = 5, l = 5)
-    )
-  
-  ggsave(
-    filename = file.path(figures_dir, "Figure_Boxplot_Temperature_Day8.tiff"), 
-    plot = p, 
-    width = 2.1, 
-    height = 4.1, 
-    dpi = 600, 
-    compression = "lzw"
-  )
-  
-  return(p)
+fmt_F <- function(df, effect) {
+  r <- df %>% filter(Effect == effect)
+  paste0("F", r$NumDF, ",", round(r$DenDF), " = ", sprintf("%.2f", r$F_value),
+         ", ", fmt_p_text(r$p_value))
 }
 
-fig_day8_temp <- generate_day8_temperature_boxplot(datos_temp_day8, pairs_day8)
+a_ch  <- anova_table %>% filter(Dataset == "Challenge")
+d8_F  <- day8_anova %>% filter(Effect == "Grupo")
+ctrl8 <- day8_descriptives %>% filter(Grupo == "Control")
 
-# =============================================================================
-# 9. IMPRESIÓN Y SALIDA FINAL EN CONSOLA
-# =============================================================================
+tukey_vs_comm <- day8_tukey %>%
+  filter(grepl("Commercial", contrast), !grepl("Control", contrast)) %>%
+  mutate(txt = paste0(gsub("ug", " µg", contrast), ", ", fmt_p_text(p.value))) %>%
+  pull(txt) %>% paste(collapse = "; ")
 
-print(fig1_temperature)
-print(fig4_lym)
-print(fig_day8_temp)
+tukey_among_rec <- day8_tukey %>%
+  filter(!grepl("Commercial|Control", contrast))
 
-cat("\n=====================================================================\n")
-cat(" EJECUCIÓN FINALIZADA CORRECTAMENTE CON ÉXITO\n")
-cat(" Tablas guardadas en: ", tables_dir, "\n")
-cat(" Figuras TIFF (600 dpi) guardadas en: ", figures_dir, "\n")
-cat(" Resultados Estadísticos LMM guardados en: ", stats_dir, "\n")
-cat("=====================================================================\n")
+f_row <- function(label, outcome) fisher_table %>% filter(Dataset == label, Outcome == outcome)
 
+text_summary <- tibble(
+  Item = c("Temperature LMM", "Day 8", "Day 8 control",
+           "Fever ≥ 39.2 °C on day 8", "Temperature > 40 °C, whole period",
+           "Post-vaccination, first dose", "Post-vaccination, booster"),
+  Sentence = c(
+    paste0("Time, ", fmt_F(a_ch, "Time"), "; group × time, ", fmt_F(a_ch, "Group × time"),
+           "; group, ", fmt_F(a_ch, "Group"), "."),
+    paste0("One-way ANOVA, F", d8_F$Df, ",", fit_day8$df.residual, " = ",
+           sprintf("%.2f", d8_F$`F value`), ", ", fmt_p_text(d8_F$`Pr(>F)`),
+           ". Tukey vs commercial: ", tukey_vs_comm,
+           ". Among recombinant doses: all ", ifelse(all(tukey_among_rec$p.value > 0.9),
+                                                     "p > 0.9", paste0("p ≥ ", sprintf("%.3f", min(tukey_among_rec$p.value)))),
+           "."),
+    sprintf("Control (n = %d): %.2f ± %.2f °C (mean ± SD).", ctrl8$n, ctrl8$mean, ctrl8$sd),
+    with(f_row("Challenge", "ge_fever_day_peak"),
+         paste0("Recombinant ", Recombinant, " vs commercial ", Commercial, " (Fisher, ", fmt_p_text(p_value), ").")),
+    with(f_row("Challenge", "any_gt_40"),
+         paste0("Recombinant ", Recombinant, " vs commercial ", Commercial, " (Fisher, ", fmt_p_text(p_value), ").")),
+    with(f_row("First dose", "any_gt_40"),
+         paste0("> 40 °C: recombinant ", Recombinant, " vs commercial ", Commercial, " (Fisher, ", fmt_p_text(p_value), ").")),
+    paste0(
+      with(f_row("Booster", "any_gt_40"),
+           paste0("> 40 °C: recombinant ", Recombinant, " vs commercial ", Commercial, "; ")),
+      with(f_row("Booster", "sustained_gt_40"),
+           paste0("sustained fever: recombinant ", Recombinant, " vs commercial ", Commercial, ".")))
+  )
+)
 
-
-
-
-
-###############################################################################
-# SCRIPT DE EXTRACCIÓN Y REPORTE TEXTUAL PARA MANUSCRITO (DÍA 8 POST-DESAFÍO)
-###############################################################################
-
-# Carga de librerías necesarias
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(emmeans)
-  library(readr)
-})
-
-# =============================================================================
-# 1. MODELADO Y COMPARACIONES EN EL DÍA 8
-# =============================================================================
-
-# Filtrar datos del Día 8
-datos_temp_day8 <- datos_temperature %>%
-  filter(Tiempo == 8)
-
-# Modelo Lineal (ANOVA una vía)
-lm_day8 <- lm(Temperatura ~ Grupo, data = datos_temp_day8)
-
-# ANOVA summary
-anova_day8 <- summary(aov(lm_day8))[[1]]
-
-# Extracción de F, Df1, Df2 y p-value
-f_stat <- anova_day8["Grupo", "F value"]
-df_num <- anova_day8["Grupo", "Df"]
-df_den <- anova_day8["Residuals", "Df"]
-p_val_model <- anova_day8["Grupo", "Pr(>F)"]
-
-# Formateo del p-valor del modelo
-p_model_str <- if (p_val_model < 0.001) "p < 0.001" else sprintf("p = %.3f", p_val_model)
-
-# Texto del Modelo Lineal
-model_report_str <- sprintf("F(%d, %d) = %.2f, %s", df_num, df_den, f_stat, p_model_str)
-
-# =============================================================================
-# 2. COMPARACIONES DE TUKEY ENTRE GRUPOS VACUNADOS
-# =============================================================================
-
-# Medias estimadas por el modelo (EMMs)
-emms_day8 <- emmeans(lm_day8, ~ Grupo)
-
-# Comparaciones par a par ajustadas por Tukey
-pairs_day8 <- as.data.frame(pairs(emms_day8, adjust = "tukey"))
-
-# Función auxiliar para formatear p-valores de comparaciones
-format_p <- function(p) {
-  if (p < 0.001) return("p < 0.001")
-  return(sprintf("p = %.3f", p))
+cat("\n================ RESUMEN PARA EL TEXTO =================\n")
+for (i in seq_len(nrow(text_summary))) {
+  cat("\n", text_summary$Item[i], ": ", text_summary$Sentence[i], sep = "")
 }
+cat("\n\nIncidencia por grupo:\n")
+print(incidence_table, n = Inf, width = Inf)
 
-# Filtrar comparaciones requeridas
-comp_vs_comm <- pairs_day8 %>%
-  filter(grepl("Comm.", contrast)) %>%
-  filter(!grepl("Control", contrast))
 
-comp_among_rec <- pairs_day8 %>%
-  filter(!grepl("Control", contrast) & !grepl("Comm.", contrast))
+# ============================================================
+# 17. FIGURA 8A: TEMPERATURA DURANTE EL DESAFÍO
+# ============================================================
 
-# Formatear comparaciones vs Comercial
-text_vs_comm <- comp_vs_comm %>%
-  rowwise() %>%
-  mutate(text = sprintf("%s (%s)", contrast, format_p(p.value))) %>%
-  pull(text) %>%
-  paste(collapse = "; ")
+fig8A <- ggplot() +
+  geom_line(data = temp_challenge,
+            aes(x = Time, y = Temp, group = Animal, color = Grupo),
+            linewidth = 0.3, alpha = 0.18) +
+  geom_line(data = summary_challenge,
+            aes(x = Time, y = mean, color = Grupo, group = Grupo),
+            linewidth = 0.8) +
+  geom_errorbar(data = summary_challenge,
+                aes(x = Time, ymin = mean - sem, ymax = mean + sem, color = Grupo),
+                width = 0.15, linewidth = 0.3) +
+  geom_point(data = summary_challenge,
+             aes(x = Time, y = mean, color = Grupo, fill = Grupo, shape = Grupo),
+             size = 1.8) +
+  geom_hline(yintercept = fever_threshold, linetype = "dashed",
+             linewidth = 0.45, color = "grey30") +
+  scale_color_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_fill_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_shape_manual(values = shape_groups, labels = group_labels, drop = FALSE) +
+  scale_x_continuous(breaks = seq(0, 28, 2), limits = c(-0.3, 28)) +
+  scale_y_continuous(breaks = seq(37.5, 42, 0.5)) +
+  labs(x = "Days after challenge", y = "Rectal temperature (°C)") +
+  theme_nature(10)
 
-# Formatear comparaciones entre dosis recombinantes
-text_among_rec <- comp_among_rec %>%
-  rowwise() %>%
-  mutate(text = sprintf("%s (%s)", contrast, format_p(p.value))) %>%
-  pull(text) %>%
-  paste(collapse = "; ")
+save_nature(fig8A, "Temperature_Figure_8A_kinetics", width = 6.5, height = 3.6)
 
-# =============================================================================
-# 3. ESTADÍSTICA DESCRIPTIVA PARA EL GRUPO CONTROL (n = 2)
-# =============================================================================
 
-control_stats <- datos_temp_day8 %>%
-  filter(Grupo == "Control") %>%
-  summarise(
-    n = n(),
-    mean_temp = mean(Temperatura, na.rm = TRUE),
-    sd_temp = sd(Temperatura, na.rm = TRUE)
+# ============================================================
+# 18. FIGURA 8B: DÍA 8 (BARRAS SOLO PARA p < 0.05, SIN EL CONTROL)
+# ============================================================
+
+x_pos <- setNames(seq_along(group_levels), group_levels)
+
+brackets_day8 <- day8_tukey %>%
+  filter(p.value < 0.05, !grepl("Control", contrast)) %>%
+  mutate(
+    g1 = trimws(sub(" - .*$", "", contrast)),
+    g2 = trimws(sub("^.* - ", "", contrast)),
+    x  = pmin(x_pos[g1], x_pos[g2]),
+    xend = pmax(x_pos[g1], x_pos[g2])
+  ) %>%
+  arrange(xend - x, x)
+
+y_top   <- max(temp_day8$Temp)
+y_range <- diff(range(temp_day8$Temp))
+
+brackets_day8 <- brackets_day8 %>%
+  mutate(
+    y      = y_top + 0.10 * y_range * row_number(),
+    y_text = y + 0.02 * y_range,
+    label  = fmt_p_text(p.value)
   )
 
-text_control_desc <- sprintf(
-  "mean ± SD: %.2f ± %.2f °C (n = %d)", 
-  control_stats$mean_temp, 
-  control_stats$sd_temp, 
-  control_stats$n
+fig8B <- ggplot(temp_day8, aes(x = Grupo, y = Temp)) +
+  geom_boxplot(aes(color = Grupo, fill = Grupo), width = 0.5,
+               outlier.shape = NA, alpha = 0.15, linewidth = 0.4) +
+  geom_point(aes(color = Grupo, fill = Grupo, shape = Grupo),
+             position = position_jitter(width = 0.1, height = 0, seed = 1),
+             size = 1.6, alpha = 0.9) +
+  geom_segment(data = brackets_day8, aes(x = x, xend = xend, y = y, yend = y),
+               inherit.aes = FALSE, linewidth = 0.35, color = "grey30") +
+  geom_text(data = brackets_day8, aes(x = (x + xend) / 2, y = y_text, label = label),
+            inherit.aes = FALSE, size = 2.3, vjust = 0) +
+  geom_hline(yintercept = fever_threshold, linetype = "dashed",
+             linewidth = 0.45, color = "grey30") +
+  scale_x_discrete(labels = group_labels) +
+  scale_color_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_fill_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_shape_manual(values = shape_groups, labels = group_labels, drop = FALSE) +
+  labs(x = NULL, y = "Rectal temperature at day 8 (°C)") +
+  guides(color = "none", fill = "none", shape = "none") +
+  theme_nature(10) +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+
+save_nature(fig8B, "Temperature_Figure_8B_day8", width = 2.6, height = 3.8)
+
+
+# ============================================================
+# 19. FIGURA S1: TEMPERATURA POSVACUNAL (AMBAS DOSIS)
+# ============================================================
+
+post_vac <- bind_rows(
+  summary_v1 %>% mutate(Dose = "First dose"),
+  summary_v2 %>% mutate(Dose = "Booster")
+) %>%
+  mutate(Dose = factor(Dose, levels = c("First dose", "Booster")))
+
+post_vac_raw <- bind_rows(
+  temp_v1 %>% mutate(Dose = "First dose"),
+  temp_v2 %>% mutate(Dose = "Booster")
+) %>%
+  mutate(Dose = factor(Dose, levels = c("First dose", "Booster")))
+
+figS1 <- ggplot() +
+  geom_line(data = post_vac_raw,
+            aes(x = Time, y = Temp, group = Animal, color = Grupo),
+            linewidth = 0.3, alpha = 0.18) +
+  geom_line(data = post_vac, aes(x = Time, y = mean, color = Grupo, group = Grupo),
+            linewidth = 0.8) +
+  geom_errorbar(data = post_vac,
+                aes(x = Time, ymin = mean - sem, ymax = mean + sem, color = Grupo),
+                width = 0.1, linewidth = 0.3) +
+  geom_point(data = post_vac,
+             aes(x = Time, y = mean, color = Grupo, fill = Grupo, shape = Grupo),
+             size = 1.8) +
+  geom_hline(yintercept = high_fever_threshold, linetype = "dashed",
+             linewidth = 0.45, color = "grey30") +
+  facet_wrap(~ Dose, scales = "free_x") +
+  scale_color_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_fill_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_shape_manual(values = shape_groups, labels = group_labels, drop = FALSE) +
+  scale_x_continuous(breaks = 0:6) +
+  labs(x = "Days after vaccination (evening readings at + 0.5)",
+       y = "Rectal temperature (°C)") +
+  theme_nature(10)
+
+save_nature(figS1, "Temperature_Figure_S1_post_vaccination", width = 7.5, height = 3.6)
+
+
+# ============================================================
+# 20. FIGURA S4: LINFOCITOS (PROMEDIOS POR GRUPO)
+# ============================================================
+
+lym_plot <- lym_long %>%
+  mutate(x = as.numeric(Sampling))
+
+challenge_x <- lym_plot %>% filter(Phase == "Challenge", Day == 0) %>% pull(x) %>% unique()
+
+x_labels <- lym_plot %>%
+  distinct(x, Phase, Day) %>%
+  arrange(x) %>%
+  mutate(lab = ifelse(Phase == "Challenge",
+                      paste0("C+", Day), paste0("V", Day)))
+
+figS4 <- ggplot(lym_plot, aes(x = x, y = LYM, color = Grupo, group = Grupo)) +
+  geom_vline(xintercept = challenge_x, linetype = "dashed",
+             linewidth = 0.45, color = "grey30") +
+  geom_line(linewidth = 0.8) +
+  geom_point(aes(shape = Grupo, fill = Grupo), size = 2.2) +
+  scale_x_continuous(breaks = x_labels$x, labels = x_labels$lab) +
+  scale_color_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_fill_manual(values = palette_nature, labels = group_labels, drop = FALSE) +
+  scale_shape_manual(values = shape_groups, labels = group_labels, drop = FALSE) +
+  labs(x = "Sampling (V = days after first vaccination; C = days after challenge)",
+       y = expression("Lymphocytes (" * 10^9 * "/L)")) +
+  theme_nature(10)
+
+save_nature(figS4, "Lymphocytes_Figure_S4", width = 7.0, height = 3.6)
+
+
+# ============================================================
+# 21. GUARDAR MODELOS
+# ============================================================
+
+saveRDS(list(challenge = lmm_challenge, first_dose = lmm_v1, booster = lmm_v2,
+             challenge_car1 = lmm_car1, day8 = fit_day8),
+        file.path(models_dir, "Temperatura_modelos.rds"))
+
+
+# ============================================================
+# 22. INFORMACIÓN DEL ANÁLISIS
+# ============================================================
+
+analysis_info <- tibble(
+  Item = c("Input file", "Animals (challenge)", "Withdrawn animals excluded",
+           "Relabelled rows", "Time coding", "Fever threshold",
+           "High fever", "Sustained fever", "Temperature model",
+           "Sensitivity model", "Day 8", "Incidence tests", "Lymphocytes",
+           "R version"),
+  Value = c(
+    basename(input_file),
+    as.character(n_distinct(temp_challenge$Animal)),
+    paste(withdrawn_animals, collapse = ", "),
+    paste0(names(relabel_v1), " -> ", relabel_v1, " (first-dose sheet)"),
+    "Sheet 'Dia k' = day k − 1; evening readings = day + 0.5",
+    paste0("≥ ", fever_threshold, " °C"),
+    paste0("> ", high_fever_threshold, " °C"),
+    paste0("≥ 2 consecutive readings > ", high_fever_threshold, " °C"),
+    "lmerTest::lmer, group * time (categorical) + (1 | animal); type III F, Satterthwaite",
+    "nlme::lme with CAR(1) within-animal correlation",
+    paste0("Day ", day_peak, ": one-way ANOVA + Tukey (emmeans)"),
+    "Fisher's exact test, recombinant groups pooled vs commercial",
+    "Group means only (no individual values): descriptive",
+    R.version.string
+  )
 )
 
-# =============================================================================
-# 4. REDACCIÓN Y CONSTRUCCIÓN DEL PÁRRAFO FINAL
-# =============================================================================
 
-final_paragraph <- sprintf(
-  "At day 8 post-challenge, rectal temperature differed significantly among groups (%s). In the Tukey-adjusted pairwise comparisons, no significant differences were observed between recombinant vaccine groups and the commercial vaccine group (%s), nor among the three recombinant vaccine doses (%s). Rectal temperature for the control group was described descriptively as %s.",
-  model_report_str,
-  text_vs_comm,
-  text_among_rec,
-  text_control_desc
-)
+# ============================================================
+# 23. EXPORTAR RESULTADOS A UN SOLO EXCEL
+# ============================================================
 
-# IMPRESIÓN EN CONSOLA
-cat("\n=====================================================================\n")
-cat(" PARÁGRAFO REDACTADO PARA EL MANUSCRITO:\n")
-cat("=====================================================================\n\n")
-cat(final_paragraph)
-cat("\n\n=====================================================================\n")
+output_excel <- file.path(tables_dir, "Temperatura_linfocitos_resultados.xlsx")
 
-# =============================================================================
-# 5. GUARDAR RESULTADO EN UN ARCHIVO DE TEXTO
-# =============================================================================
+wb <- createWorkbook()
 
-report_file <- file.path(stats_dir, "09b_Day8_Statistical_Report_Text.txt")
-writeLines(final_paragraph, report_file)
-cat(paste(" Reporte guardado en:", report_file, "\n"))
+add_sheet <- function(wb, sheet_name, data) {
+  addWorksheet(wb, sheet_name)
+  if (is.null(data) || nrow(data) == 0) data <- data.frame(Information = "No data available")
+  writeData(wb, sheet = sheet_name, x = data)
+  freezePane(wb, sheet = sheet_name, firstRow = TRUE)
+  setColWidths(wb, sheet = sheet_name, cols = seq_len(ncol(data)), widths = "auto")
+}
+
+add_sheet(wb, "Datos_desafio",      temp_challenge)
+add_sheet(wb, "Datos_dosis1",       temp_v1)
+add_sheet(wb, "Datos_refuerzo",     temp_v2)
+add_sheet(wb, "Resumen_desafio",    summary_challenge)
+add_sheet(wb, "Resumen_dosis1",     summary_v1)
+add_sheet(wb, "Resumen_refuerzo",   summary_v2)
+add_sheet(wb, "LMM_ANOVA",          anova_table)
+add_sheet(wb, "LMM_CAR1",           anova_car1)
+add_sheet(wb, "Dia8_ANOVA",         day8_anova)
+add_sheet(wb, "Dia8_Tukey",         day8_tukey)
+add_sheet(wb, "Dia8_descriptivos",  day8_descriptives)
+add_sheet(wb, "Por_animal_desafio", outcomes_challenge)
+add_sheet(wb, "Por_animal_dosis1",  outcomes_v1)
+add_sheet(wb, "Por_animal_refuerzo", outcomes_v2)
+add_sheet(wb, "Incidencia_Tabla4",  incidence_table)
+add_sheet(wb, "Fisher",             fisher_table)
+add_sheet(wb, "Linfocitos",         lym_long)
+add_sheet(wb, "Linfocitos_desafio", lym_challenge)
+add_sheet(wb, "Texto",              text_summary)
+add_sheet(wb, "Analysis_info",      analysis_info)
+
+saveWorkbook(wb, output_excel, overwrite = TRUE)
+
+
+# ============================================================
+# 24. INFORME EN UN SOLO WORD
+# ============================================================
+
+output_word <- file.path(reports_dir, "Temperatura_linfocitos_informe.docx")
+
+make_ft <- function(df) {
+  flextable(df) %>% theme_booktabs() %>% fontsize(size = 9, part = "all") %>% autofit()
+}
+
+doc <- read_docx() %>%
+  body_add_par("Rectal temperature and lymphocytes", style = "heading 1") %>%
+  body_add_par(paste0("Generated on ", format(Sys.Date(), "%Y-%m-%d"),
+                      " with ", R.version.string, "."), style = "Normal") %>%
+  body_add_par("Draft text", style = "heading 2")
+
+for (i in seq_len(nrow(text_summary))) {
+  doc <- body_add_par(doc, paste0(text_summary$Item[i], ": ", text_summary$Sentence[i]),
+                      style = "Normal")
+}
+
+doc <- doc %>%
+  body_add_par("Mixed models (temperature)", style = "heading 2") %>%
+  body_add_flextable(make_ft(anova_table %>% select(Dataset, Effect, NumDF, DenDF, F_value, p = p_text))) %>%
+  body_add_par("Sensitivity: CAR(1) within-animal correlation (challenge)", style = "heading 3") %>%
+  body_add_flextable(make_ft(if (nrow(anova_car1) > 0)
+    anova_car1 %>% select(Effect, numDF, denDF, F_value, p = p_text, Phi)
+    else data.frame(Information = "Model did not converge"))) %>%
+  body_add_par("Day 8: Tukey comparisons", style = "heading 2") %>%
+  body_add_flextable(make_ft(day8_tukey %>%
+                               transmute(Contrast = gsub("ug", " µg", contrast),
+                                         Estimate = round(estimate, 2),
+                                         t = round(t.ratio, 2), p = p_text))) %>%
+  body_add_par("Incidence by group (Table 4 and post-vaccination)", style = "heading 2") %>%
+  body_add_flextable(make_ft(incidence_table %>%
+                               mutate(Grupo = group_labels[as.character(Grupo)]) %>%
+                               rename(Group = Grupo,
+                                      `≥39.2 am` = any_ge_fever_am,
+                                      `≥39.2 all` = any_ge_fever_all,
+                                      `>40` = any_gt_40,
+                                      `>40 day 8` = gt_40_day_peak,
+                                      `≥39.2 day 8` = ge_fever_day_peak,
+                                      `Sustained >40` = sustained_gt_40))) %>%
+  body_add_par("Fisher's exact tests (recombinant pooled vs commercial)", style = "heading 2") %>%
+  body_add_flextable(make_ft(fisher_table %>% select(Dataset, Outcome, Recombinant, Commercial, p = p_text))) %>%
+  body_add_break() %>%
+  body_add_par("Figure 8A–B", style = "heading 2") %>%
+  body_add_img(file.path(figures_dir, "Temperature_Figure_8A_kinetics.png"),
+               width = 6.3, height = 6.3 * 3.6 / 6.5) %>%
+  body_add_img(file.path(figures_dir, "Temperature_Figure_8B_day8.png"),
+               width = 2.4, height = 2.4 * 3.8 / 2.6) %>%
+  body_add_par("Figure S1: post-vaccination temperature", style = "heading 2") %>%
+  body_add_img(file.path(figures_dir, "Temperature_Figure_S1_post_vaccination.png"),
+               width = 6.3, height = 6.3 * 3.6 / 7.5) %>%
+  body_add_par("Figure S4: lymphocytes (group means)", style = "heading 2") %>%
+  body_add_img(file.path(figures_dir, "Lymphocytes_Figure_S4.png"),
+               width = 6.3, height = 6.3 * 3.6 / 7.0)
+
+print(doc, target = output_word)
+
+
+# ============================================================
+# 25. SESSION INFO Y MENSAJE FINAL
+# ============================================================
+
+writeLines(capture.output(sessionInfo()),
+           file.path(results_dir, "sessionInfo_temperatura.txt"))
+
+cat("\n\n============================================================\n")
+cat("ANÁLISIS COMPLETADO CORRECTAMENTE\n")
+cat("============================================================\n")
+cat("\nExcel:  ", output_excel, "\n")
+cat("Word:   ", output_word, "\n")
+cat("Figuras:", figures_dir, "\n")
+cat("\n============================================================\n")
