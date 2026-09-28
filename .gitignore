@@ -1,15 +1,19 @@
+# R / RStudio
 .Rproj.user
 .Rhistory
 .RData
+.RDataTmp*
 .Ruserdata
 
-# Raw experimental data
+# Raw experimental data (not public)
 data/raw/*
+!data/raw/.gitkeep
 
 # Temporary and local files
 *.tmp
 *.log
 *.bak
+~$*
 
 # OS files
 .DS_Store
